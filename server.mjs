@@ -24,6 +24,21 @@ try { if (process.env.ACTUAL_ALIASES) ALIASES = JSON.parse(process.env.ACTUAL_AL
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
+// Regles de demarrage : [mot-cle dans les Notes, nom de categorie]. A affiner ensuite dans Actual.
+const SEED_RULES = [
+  ['CARREFOUR', 'Alimentation'], ['MONOPRIX', 'Alimentation'], ['FRANPRIX', 'Alimentation'],
+  ['LIDL', 'Alimentation'], ['AUCHAN', 'Alimentation'], ['INTERMARCHE', 'Alimentation'],
+  ['BOULANGERIE', 'Alimentation'],
+  ['MCDO', 'Restaurants'], ['MCDONALD', 'Restaurants'], ['DELIVEROO', 'Restaurants'],
+  ['UBER EATS', 'Restaurants'], ['SUSHI', 'Restaurants'], ['SWILE', 'Restaurants'], ['BURGER', 'Restaurants'],
+  ['PATHE', 'Sorties'], ['CINE', 'Sorties'], ['ACHATBILLETCINE', 'Sorties'],
+  ['AMAZON', 'Shopping / Vêtements'], ['VINTED', 'Shopping / Vêtements'], ['ZALANDO', 'Shopping / Vêtements'],
+  ['ACTION', 'Shopping / Vêtements'],
+  ['APPLE.COM', 'Abonnements'], ['NETFLIX', 'Abonnements'], ['SPOTIFY', 'Abonnements'], ['YOUTUBE', 'Abonnements'],
+  ['SNCF', 'Transport'], ['TOTAL', 'Transport'], ['ESSO', 'Transport'], ['CARBURANT', 'Transport'], ['UBER ', 'Transport'],
+  ['PHARMACIE', 'Santé'],
+];
+
 // ============================ parseur Sumeria ============================
 const YEAR_RE = /Du\s+\d{1,2}\/\d{1,2}\/(\d{4})/;
 const stripAccents = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '');
@@ -60,6 +75,19 @@ function toISO(dstr, year) {
   let yy = m[3] || year; if (yy && yy.length === 2) yy = '20' + yy;
   return yy ? `${yy}-${mm}-${dd}` : null;
 }
+// Extrait un beneficiaire propre depuis le libelle ; null si rien de clair.
+function extractPayee(firstLine) {
+  let s = String(firstLine || '').replace(/\s+/g, ' ').trim();
+  let m;
+  if ((m = s.match(/(?:Paiement|Transaction)\s+carte\b[^:]*:\s*(.+)$/i))) s = m[1];
+  else if ((m = s.match(/Remboursement\s+de\s+(.+?)\s+sur\s+carte\b/i))) s = m[1];
+  else if ((m = s.match(/Virement\s+SEPA\s+re[çc]u\s+de\s+(.+)$/i))) s = m[1].replace(/\s+pour\s.*$/i, '');
+  else if ((m = s.match(/Virement\s+interne\s+\S+\s*-\s*(.+)$/i))) s = m[1].replace(/\s*\(.*\)\s*$/, '');
+  else return null; // Virement SEPA emis vers IBAN, ou inconnu -> beneficiaire vide
+  s = s.replace(/\s+\d{3,}$/, '').replace(/\s+/g, ' ').trim(); // enleve un ref numerique final
+  return s || null;
+}
+
 function parseSumeria(text) {
   const rawLines = text.replace(/\r\n/g, '\n').split('\n');
   let account = null;
@@ -81,9 +109,12 @@ function parseSumeria(text) {
     let dcount = 0; while (dcount < n && /^\d{1,2}\/\d{1,2}(\/\d{2,4})?$/.test(String(r[dcount]).trim())) dcount++;
     const desc = r.slice(dcount, n - 3).join(' ').replace(/\s*\n\s*/g, '\n').trim();
     const descLines = desc.split('\n').map(x => x.trim()).filter(Boolean);
-    const notes = descLines.join(' | ') || null;   // libelle+refs dans Notes, beneficiaire vide
+    const notes = descLines.join(' | ') || null;   // libelle+refs conserves dans Notes
+    const payee = extractPayee(descLines[0]);       // beneficiaire propre (ou null)
     const refInt = desc.match(/interne\s*:\s*([0-9a-fA-F-]{8,})/);
-    transactions.push({ date: iso, amount, notes, imported_id: refInt ? refInt[1] : undefined, cleared: true });
+    const tx = { date: iso, amount, notes, imported_id: refInt ? refInt[1] : undefined, cleared: true };
+    if (payee) tx.payee_name = payee;
+    transactions.push(tx);
   }
   return { account, transactions };
 }
@@ -162,7 +193,7 @@ app.post('/api/run', upload.array('files'), async (req, res) => {
       const acc = findAccount(accounts, p.account);
       if (!acc) { results.push({ file: p.file, account: p.account, count: p.transactions.length, matched: false }); continue; }
       const base = { file: p.file, account: p.account, mapped: acc.name, count: p.transactions.length, matched: true,
-        sample: p.transactions.slice(0, 3).map(t => `${t.date}  ${(t.amount / 100).toFixed(2)}€  ${(t.notes || '').slice(0, 40)}`) };
+        sample: p.transactions.slice(0, 3).map(t => `${t.date}  ${(t.amount / 100).toFixed(2)}€  ${t.payee_name || '(sans bénéficiaire)'}`) };
       if (dryRun) { results.push(base); continue; }
       if (replaceExisting) {
         const ids = new Set(p.transactions.map(t => t.imported_id).filter(Boolean));
@@ -180,6 +211,35 @@ app.post('/api/run', upload.array('files'), async (req, res) => {
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e?.message || e) });
   } finally { busy = false; }
+});
+
+app.post('/api/seed-rules', async (_req, res) => {
+  if (busy) return res.status(409).json({ ok: false, error: "Un traitement est deja en cours." });
+  busy = true;
+  try {
+    await openBudget();
+    const cats = await api.getCategories();
+    const catByName = new Map(cats.map(c => [norm(c.name), c.id]));
+    const rules = await api.getRules();
+    const existing = new Set();
+    for (const r of rules) for (const c of (r.conditions || [])) if (c.field === 'notes' && c.op === 'contains') existing.add(String(c.value).toLowerCase());
+
+    let created = 0, skipped = 0; const missing = new Set(); const done = [];
+    for (const [kw, catName] of SEED_RULES) {
+      const catId = catByName.get(norm(catName));
+      if (!catId) { missing.add(catName); continue; }
+      if (existing.has(kw.toLowerCase().trim())) { skipped++; continue; }
+      await api.createRule({
+        stage: 'pre', conditionsOp: 'and',
+        conditions: [{ field: 'notes', op: 'contains', value: kw }],
+        actions: [{ field: 'category', op: 'set', value: catId }],
+      });
+      created++; done.push(`${kw.trim()} → ${catName}`);
+    }
+    await api.sync();
+    res.json({ ok: true, created, skipped, missingCategories: [...missing], done });
+  } catch (e) { res.status(500).json({ ok: false, error: String(e?.message || e) }); }
+  finally { busy = false; }
 });
 
 app.listen(PORT, () => console.log(`Sumeria->Actual web sur le port ${PORT}`));

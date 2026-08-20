@@ -64,6 +64,17 @@
     <p class="mini" style="margin:10px 0 0">« Remplacer l'existant » supprime les opérations déjà importées (même Réf. interne) avant de réimporter — utile pour corriger un format. En usage normal, laisse-le décoché.</p>
   </div>
 
+  <div class="card">
+    <div class="row" style="justify-content:space-between">
+      <div>
+        <b>Catégorisation automatique</b>
+        <div class="mini" style="margin-top:2px">Crée un jeu de règles de départ (Carrefour→Alimentation, etc.). À affiner ensuite dans Actual → Règles.</div>
+      </div>
+      <button class="ghost" id="btnRules">Créer les règles de départ</button>
+    </div>
+    <div id="rulesRes" class="mini" style="margin-top:10px"></div>
+  </div>
+
   <div class="card" id="resCard" style="display:none">
     <div id="summary" class="row" style="margin-bottom:6px"></div>
     <div style="overflow-x:auto"><table id="resTable"></table></div>
@@ -108,6 +119,22 @@ $('btnRun').onclick = async () => {
     render(d);
   } catch(e){ alert('Erreur : ' + e.message); }
   finally { $('btnRun').disabled = false; $('btnRun').textContent = 'Lancer'; }
+};
+
+$('btnRules').onclick = async () => {
+  $('btnRules').disabled = true; $('btnRules').textContent = 'Création…';
+  $('rulesRes').textContent = '';
+  try {
+    const r = await fetch('/api/seed-rules', { method:'POST' });
+    const d = await r.json();
+    if(!d.ok) throw new Error(d.error);
+    let msg = `<span class="tag-ok">${d.created} règle(s) créée(s)</span>`;
+    if(d.skipped) msg += ` · ${d.skipped} déjà présente(s)`;
+    if(d.missingCategories?.length) msg += `<br><span class="tag-skip">Catégories introuvables (ignorées) : ${d.missingCategories.map(esc).join(', ')}</span>`;
+    if(d.done?.length) msg += `<br>${d.done.map(esc).join(' · ')}`;
+    $('rulesRes').innerHTML = msg;
+  } catch(e){ $('rulesRes').innerHTML = `<span class="tag-no">Erreur : ${esc(e.message)}</span>`; }
+  finally { $('btnRules').disabled = false; $('btnRules').textContent = 'Créer les règles de départ'; }
 };
 
 function render(d){
