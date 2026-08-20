@@ -16,6 +16,7 @@ const SERVER_URL = process.env.ACTUAL_SERVER_URL;
 const PASSWORD   = process.env.ACTUAL_PASSWORD;
 const SYNC_ID    = process.env.ACTUAL_SYNC_ID || '';
 const BUDGET_NAME= process.env.ACTUAL_BUDGET_NAME || '';
+const E2E_PASSWORD = process.env.ACTUAL_E2E_PASSWORD || ''; // mot de passe de chiffrement (budget end-to-end encrypted)
 const DATA_DIR   = process.env.DATA_DIR || path.join(__dirname, 'data');
 const PORT       = process.env.PORT || 3000;
 let ALIASES = {};
@@ -105,7 +106,7 @@ async function openBudget() {
   await ensureInit();
   const budgets = await api.getBudgets();
   const syncId = await resolveSyncId(budgets);
-  await api.downloadBudget(syncId);
+  await api.downloadBudget(syncId, E2E_PASSWORD ? { password: E2E_PASSWORD } : undefined);
   return { budgets, syncId };
 }
 function findAccount(accounts, sumName) {

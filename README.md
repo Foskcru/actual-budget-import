@@ -58,6 +58,7 @@ Puis ouvre `http://IP-DU-NAS:8092`.
 | `ACTUAL_PASSWORD` | ✅ | Mot de passe du serveur Actual |
 | `ACTUAL_SYNC_ID` | ✅* | ID de synchronisation du budget (*Paramètres → Avancé*) |
 | `ACTUAL_BUDGET_NAME` | ✅* | Alternative à `SYNC_ID` : cibler par nom de budget |
+| `ACTUAL_E2E_PASSWORD` | — | Mot de passe de chiffrement, si le budget est *end-to-end encrypted* |
 | `ACTUAL_ALIASES` | — | JSON de correspondances de comptes, ex. `{"Anniversaire":"SUM Anniversaires"}` |
 | `PORT` | — | Port interne (défaut `3000`) |
 | `DATA_DIR` | — | Cache local du budget (défaut `/data`) |
