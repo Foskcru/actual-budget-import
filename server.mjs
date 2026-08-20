@@ -123,7 +123,8 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.get('/api/status', async (_req, res) => {
   try {
     const { budgets, syncId } = await openBudget();
-    let version = null; try { version = await api.getServerVersion(); } catch {}
+    let version = null;
+    try { const v = await api.getServerVersion(); version = (v && typeof v === 'object') ? (v.version || JSON.stringify(v)) : v; } catch {}
     const accounts = await api.getAccounts();
     res.json({ ok: true, serverVersion: version, syncId,
       budgets: budgets.map(b => b.name),
@@ -140,12 +141,14 @@ app.post('/api/run', upload.array('files'), async (req, res) => {
     // 1) parse des fichiers
     const parsed = [];
     for (const f of (req.files || [])) {
+      // multer decode le nom en latin1 -> reconvertir en UTF-8 pour les accents
+      const fname = Buffer.from(f.originalname, 'latin1').toString('utf8');
       const text = f.buffer.toString('utf8');
-      if (!/Nom du compte,/i.test(text)) { parsed.push({ file: f.originalname, skipped: 'pas un releve Sumeria' }); continue; }
+      if (!/Nom du compte,/i.test(text)) { parsed.push({ file: fname, skipped: 'pas un releve Sumeria' }); continue; }
       const p = parseSumeria(text);
-      if (!p.account) { parsed.push({ file: f.originalname, skipped: 'compte introuvable (ligne 2)' }); continue; }
-      if (!p.transactions.length) { parsed.push({ file: f.originalname, skipped: '0 operation' }); continue; }
-      parsed.push({ file: f.originalname, account: p.account, transactions: p.transactions });
+      if (!p.account) { parsed.push({ file: fname, skipped: 'compte introuvable (ligne 2)' }); continue; }
+      if (!p.transactions.length) { parsed.push({ file: fname, skipped: '0 operation' }); continue; }
+      parsed.push({ file: fname, account: p.account, transactions: p.transactions });
     }
     if (!parsed.some(p => p.transactions)) { busy = false; return res.json({ ok: true, dryRun, results: parsed.map(p => ({ ...p, transactions: undefined })) }); }
 
