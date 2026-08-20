@@ -1,7 +1,7 @@
 services:
   sumeria-import:
     # Image construite automatiquement par GitHub Actions (remplace VOTRE-USER-GITHUB).
-    image: ghcr.io/VOTRE-USER-GITHUB/sumeria-actual-import:latest
+    image: ghcr.io/foskcru/sumeria-actual-import:latest
     # --- Alternative : construire en local au lieu de tirer l'image ---
     # build: .
     container_name: sumeria-import

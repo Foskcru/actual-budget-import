@@ -26,7 +26,7 @@ sans doublon — via l'API officielle d'Actual.
 ```yaml
 services:
   sumeria-import:
-    image: ghcr.io/VOTRE-USER-GITHUB/sumeria-actual-import:latest
+    image: ghcr.io/foskcru/sumeria-actual-import:latest
     container_name: sumeria-import
     restart: unless-stopped
     ports:
@@ -42,7 +42,7 @@ services:
 ### Option B — build local
 
 ```bash
-git clone https://github.com/VOTRE-USER-GITHUB/sumeria-actual-import.git
+git clone https://github.com/foskcru/sumeria-actual-import.git
 cd sumeria-actual-import
 # éditer docker-compose.yml (décommenter "build: .", remplir les variables)
 docker compose up -d --build
