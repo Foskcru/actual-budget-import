@@ -1,0 +1,25 @@
+services:
+  sumeria-import:
+    # Image construite automatiquement par GitHub Actions (remplace VOTRE-USER-GITHUB).
+    image: ghcr.io/VOTRE-USER-GITHUB/sumeria-actual-import:latest
+    # --- Alternative : construire en local au lieu de tirer l'image ---
+    # build: .
+    container_name: sumeria-import
+    restart: unless-stopped
+    ports:
+      - "8092:3000"          # http://IP-DU-NAS:8092  (ou derriere ton NPM)
+    environment:
+      # --- OBLIGATOIRE ---
+      ACTUAL_SERVER_URL: "https://ADRESSE-DE-TON-ACTUAL"   # la meme URL que d'habitude
+      ACTUAL_PASSWORD:   "MOT_DE_PASSE_DU_SERVEUR_ACTUAL"
+      # --- Cibler le budget : l'un OU l'autre ---
+      ACTUAL_SYNC_ID:    "ea76be7f-...."                   # Parametres > Avance > ID de synchronisation
+      # ACTUAL_BUDGET_NAME: "Budget EC"                    # (si tu preferes par nom, laisse SYNC_ID vide)
+      # --- Optionnel : correspondances de noms de comptes ---
+      # ACTUAL_ALIASES: '{"Anniversaire":"SUM Anniversaires"}'
+    volumes:
+      - ./data:/data        # cache local du budget (persistant)
+
+# Astuce reseau : pour parler a Actual EN INTERNE (sans passer par internet),
+# mets ce conteneur sur le meme reseau Docker qu'Actual et utilise
+# ACTUAL_SERVER_URL: "http://<nom-service-actual>:5006".

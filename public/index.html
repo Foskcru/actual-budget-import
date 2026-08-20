@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Import Sumeria → Actual</title>
+<style>
+  :root{--bg:#0f1420;--card:#171d2b;--ink:#e7eaf0;--muted:#97a0b3;--line:#262e3f;
+        --accent:#4f7cff;--ok:#2fbf71;--warn:#e0a100;--err:#d1495b;--soft:#1b2440;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;padding:24px}
+  .wrap{max-width:900px;margin:0 auto}
+  h1{font-size:22px;margin:0 0 4px}
+  .sub{color:var(--muted);margin:0 0 20px;font-size:13px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin-bottom:16px}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  button{background:var(--accent);color:#fff;border:0;border-radius:8px;padding:10px 16px;font-size:14px;font-weight:600;cursor:pointer}
+  button.ghost{background:transparent;border:1px solid var(--line);color:var(--ink)}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  #drop{border:2px dashed var(--line);border-radius:12px;padding:30px;text-align:center;color:var(--muted);cursor:pointer;transition:.15s}
+  #drop.hover{border-color:var(--accent);background:var(--soft);color:var(--ink)}
+  .files{margin:10px 0 0;font-size:13px;color:var(--muted)}
+  label.chk{display:flex;gap:8px;align-items:center;font-size:14px;cursor:pointer}
+  .status{font-size:13px}
+  .pill{display:inline-block;padding:2px 8px;border-radius:6px;font-size:12px;font-weight:600}
+  .pill.ok{background:rgba(47,191,113,.15);color:var(--ok)}
+  .pill.err{background:rgba(209,73,91,.15);color:var(--err)}
+  table{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px}
+  th,td{text-align:left;padding:8px 6px;border-top:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.05em}
+  .tag-ok{color:var(--ok);font-weight:700}
+  .tag-no{color:var(--err);font-weight:700}
+  .tag-skip{color:var(--warn)}
+  .mini{color:var(--muted);font-size:12px}
+  code{background:var(--soft);padding:1px 5px;border-radius:4px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Import Sumeria → Actual</h1>
+  <p class="sub">Dépose tes relevés Sumeria (CSV bruts). Chaque fichier est envoyé dans le bon compte, sans doublon.</p>
+
+  <div class="card">
+    <div class="row" style="justify-content:space-between">
+      <div class="status" id="status">Connexion non testée.</div>
+      <button class="ghost" id="btnStatus">Tester la connexion</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div id="drop">📄 Glisse tes fichiers CSV ici, ou clique pour choisir</div>
+    <input type="file" id="file" accept=".csv" multiple hidden>
+    <div class="files" id="fileList"></div>
+  </div>
+
+  <div class="card">
+    <div class="row" style="justify-content:space-between">
+      <div class="row" style="gap:18px">
+        <label class="chk"><input type="checkbox" id="dry" checked> Simulation (rien n'est écrit)</label>
+        <label class="chk"><input type="checkbox" id="replace"> Remplacer l'existant</label>
+      </div>
+      <button id="btnRun" disabled>Lancer</button>
+    </div>
+    <p class="mini" style="margin:10px 0 0">« Remplacer l'existant » supprime les opérations déjà importées (même Réf. interne) avant de réimporter — utile pour corriger un format. En usage normal, laisse-le décoché.</p>
+  </div>
+
+  <div class="card" id="resCard" style="display:none">
+    <div id="summary" class="row" style="margin-bottom:6px"></div>
+    <div style="overflow-x:auto"><table id="resTable"></table></div>
+  </div>
+</div>
+
+<script>
+let files = [];
+const $ = (id) => document.getElementById(id);
+const drop = $('drop'), input = $('file');
+
+drop.onclick = () => input.click();
+input.onchange = () => { files = [...input.files]; renderFiles(); };
+['dragover','dragenter'].forEach(e=>drop.addEventListener(e,ev=>{ev.preventDefault();drop.classList.add('hover')}));
+['dragleave','drop'].forEach(e=>drop.addEventListener(e,ev=>{ev.preventDefault();drop.classList.remove('hover')}));
+drop.addEventListener('drop', ev => { files = [...ev.dataTransfer.files].filter(f=>f.name.toLowerCase().endsWith('.csv')); renderFiles(); });
+
+function renderFiles(){
+  $('fileList').textContent = files.length ? `${files.length} fichier(s) : ` + files.map(f=>f.name).join(', ') : '';
+  $('btnRun').disabled = files.length === 0;
+}
+
+$('btnStatus').onclick = async () => {
+  $('status').innerHTML = 'Test en cours…';
+  try {
+    const r = await fetch('/api/status'); const d = await r.json();
+    if(!d.ok) throw new Error(d.error);
+    $('status').innerHTML = `<span class="pill ok">connecté</span> serveur v${d.serverVersion||'?'} · ${d.accounts.length} comptes · budget ouvert`;
+  } catch(e){ $('status').innerHTML = `<span class="pill err">échec</span> ${e.message}`; }
+};
+
+$('btnRun').onclick = async () => {
+  const fd = new FormData();
+  files.forEach(f => fd.append('files', f));
+  fd.append('dryRun', $('dry').checked ? 'true':'false');
+  fd.append('replaceExisting', $('replace').checked ? 'true':'false');
+  $('btnRun').disabled = true; $('btnRun').textContent = 'Traitement…';
+  try {
+    const r = await fetch('/api/run', { method:'POST', body: fd });
+    const d = await r.json();
+    if(!d.ok) throw new Error(d.error);
+    render(d);
+  } catch(e){ alert('Erreur : ' + e.message); }
+  finally { $('btnRun').disabled = false; $('btnRun').textContent = 'Lancer'; }
+};
+
+function render(d){
+  $('resCard').style.display = 'block';
+  const mode = d.dryRun ? '<span class="pill" style="background:var(--soft);color:var(--muted)">SIMULATION</span>' : '<span class="pill ok">IMPORT RÉEL</span>';
+  let add=0, del=0, ko=0;
+  d.results.forEach(x=>{ add+=x.added||0; del+=x.deleted||0; if(x.matched===false) ko++; });
+  $('summary').innerHTML = `${mode} &nbsp; ${d.dryRun?'':`<b>${add}</b> ajoutée(s), <b>${del}</b> supprimée(s) &nbsp;`} ${ko?`<span class="tag-no">${ko} compte(s) non trouvé(s)</span>`:''}`;
+  let h = '<tr><th>Fichier</th><th>Compte</th><th>Op.</th><th>Résultat</th></tr>';
+  for(const x of d.results){
+    if(x.skipped){ h+=`<tr><td>${esc(x.file)}</td><td colspan="3" class="tag-skip">ignoré : ${esc(x.skipped)}</td></tr>`; continue; }
+    if(x.matched===false){ h+=`<tr><td>${esc(x.file)}</td><td>${esc(x.account)}</td><td>${x.count}</td><td class="tag-no">aucun compte Actual correspondant</td></tr>`; continue; }
+    let result = d.dryRun
+      ? `<span class="tag-ok">→ ${esc(x.mapped)}</span><div class="mini">${(x.sample||[]).map(esc).join('<br>')}</div>`
+      : `<span class="tag-ok">+${x.added} ajoutée(s)</span>${x.deleted?` · ${x.deleted} suppr.`:''}${x.updated?` · ${x.updated} maj`:''} <span class="mini">→ ${esc(x.mapped)}</span>`;
+    h += `<tr><td>${esc(x.file)}</td><td>${esc(x.account)}</td><td>${x.count}</td><td>${result}</td></tr>`;
+  }
+  $('resTable').innerHTML = h;
+}
+function esc(s){ return String(s).replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+</script>
+</body>
+</html>

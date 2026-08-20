@@ -1,0 +1,14 @@
+{
+  "name": "sumeria-actual-webui",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "@actual-app/api": "26.8.1",
+    "express": "^4.21.2",
+    "multer": "^2.0.1"
+  }
+}
