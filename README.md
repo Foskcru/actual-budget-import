@@ -18,7 +18,8 @@ sans doublon — via l'API officielle d'Actual.
 - 🧪 **Mode simulation** : voir ce qui serait importé sans rien écrire
 - ♻️ **Remplacer l'existant** : réappliquer un nouveau format (supprime puis réimporte)
 - 📅 Gère les **deux formats** d'export Sumeria (ancien et récent), dates `JJ/MM` → année déduite de la période
-- 💶 Débits en négatif, crédits en positif ; libellé dans **Notes**, bénéficiaire laissé vide
+- 💶 Débits en négatif, crédits en positif ; **bénéficiaire** extrait proprement du libellé (commerçant), libellé complet conservé dans **Notes**
+- 🏷️ **Catégorisation auto** : bouton pour créer un jeu de règles de départ, appliqué à chaque import
 
 ## Déploiement (Docker / Dockge)
 
@@ -27,7 +28,7 @@ sans doublon — via l'API officielle d'Actual.
 ```yaml
 services:
   sumeria-import:
-    image: ghcr.io/foskcru/sumeria-actual-import:latest
+    image: ghcr.io/foskcru/actual-budget-import:latest
     container_name: sumeria-import
     restart: unless-stopped
     ports:
@@ -43,22 +44,22 @@ services:
 ### Option B — build local
 
 ```bash
-git clone https://github.com/foskcru/sumeria-actual-import.git
-cd sumeria-actual-import
+git clone https://github.com/foskcru/actual-budget-import.git
+cd actual-budget-import
 # éditer docker-compose.yml (décommenter "build: .", remplir les variables)
 docker compose up -d --build
 ```
 
 Puis ouvre `http://IP-DU-NAS:8092`.
 
-## Comptes & configuration
+## Comptes & configuration (multi-utilisateurs)
 
-- **1ʳᵉ visite** : la page te demande de créer le **compte administrateur** (identifiant + mot de passe).
-- Ensuite, connexion obligatoire pour accéder à l'app.
-- L'admin ouvre **Paramètres** pour saisir la config Actual (URL serveur, mot de passe, ID de synchro, mot de passe de chiffrement…) — **directement dans l'interface**, pas besoin de toucher au compose.
-- L'admin peut créer **d'autres comptes** utilisateurs.
+- **1ʳᵉ visite** : création du **compte administrateur** (identifiant + mot de passe).
+- Connexion obligatoire pour accéder à l'app.
+- **Chaque utilisateur a sa PROPRE config Actual** (URL serveur, mot de passe, ID de synchro, chiffrement) via sa page **Paramètres** → il importe **dans son propre budget, isolé des autres**.
+- L'admin peut créer **d'autres comptes** utilisateurs (chacun configure ensuite le sien).
 
-Les utilisateurs et les réglages sont stockés dans une base **SQLite** (`app.db`) dans le volume `/data` — **pense à le persister**.
+Utilisateurs et réglages (par utilisateur) sont stockés dans une base **SQLite** (`app.db`) dans le volume `/data` — **pense à le persister**.
 
 ### Variables d'environnement (toutes optionnelles)
 Elles servent seulement de **valeurs par défaut** au tout premier démarrage (pratique pour pré-remplir). Ensuite tout se gère dans l'UI.

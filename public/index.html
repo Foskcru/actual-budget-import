@@ -56,7 +56,8 @@
   </div>
 
   <div class="card" id="settingsCard" style="display:none">
-    <b>Paramètres de connexion Actual</b>
+    <b>Mes paramètres de connexion Actual</b>
+    <div class="mini" style="margin-top:2px">Ta config est privée : tu importes dans ton propre budget, isolé des autres utilisateurs.</div>
     <div class="grid2" style="margin-top:12px">
       <div><label class="mini">URL du serveur</label><input type="text" id="s_url" placeholder="https://actual..."></div>
       <div><label class="mini">ID de synchronisation (budget)</label><input type="text" id="s_sync" placeholder="ea76be7f-..."></div>
@@ -66,14 +67,16 @@
       <div><label class="mini">Aliases (JSON)</label><input type="text" id="s_alias" placeholder='{"Anniversaire":"SUM Anniversaires"}'></div>
     </div>
     <div class="row" style="margin-top:12px"><button id="s_save">Enregistrer</button><span id="s_msg" class="mini"></span></div>
-    <hr style="border:0;border-top:1px solid var(--line);margin:18px 0">
-    <b>Utilisateurs</b>
-    <div id="userList" class="mini" style="margin:8px 0"></div>
-    <div class="row" style="gap:8px">
-      <input type="text" id="u_name" placeholder="identifiant" style="max-width:150px">
-      <input type="password" id="u_pw" placeholder="mot de passe" style="max-width:150px">
-      <label class="chk"><input type="checkbox" id="u_admin"> admin</label>
-      <button class="ghost" id="u_add">Ajouter</button>
+    <div id="usersBlock" style="display:none">
+      <hr style="border:0;border-top:1px solid var(--line);margin:18px 0">
+      <b>Utilisateurs</b> <span class="mini">(admin)</span>
+      <div id="userList" class="mini" style="margin:8px 0"></div>
+      <div class="row" style="gap:8px">
+        <input type="text" id="u_name" placeholder="identifiant" style="max-width:150px">
+        <input type="password" id="u_pw" placeholder="mot de passe" style="max-width:150px">
+        <label class="chk"><input type="checkbox" id="u_admin"> admin</label>
+        <button class="ghost" id="u_add">Ajouter</button>
+      </div>
     </div>
   </div>
 
@@ -135,12 +138,15 @@ function renderFiles(){
 }
 
 // --- authentification ---
+let IS_ADMIN = false;
 (async function guard(){
   try {
     const m = await (await fetch('/api/me')).json();
     if(!m.ok){ location.href='/login.html'; return; }
+    IS_ADMIN = !!m.isAdmin;
     $('who').textContent = m.username + (m.isAdmin ? ' · admin' : '');
-    if(m.isAdmin) $('btnSettings').style.display='';
+    $('btnSettings').style.display='';           // chacun gère ses propres réglages
+    if(IS_ADMIN) $('usersBlock').style.display='';
   } catch { location.href='/login.html'; }
 })();
 $('btnLogout').onclick = async () => { await fetch('/api/logout',{method:'POST'}); location.href='/login.html'; };
@@ -152,7 +158,7 @@ async function loadSettings(){
   const d = await (await fetch('/api/settings')).json(); if(!d.ok) return;
   $('s_url').value=d.serverURL||''; $('s_sync').value=d.syncId||''; $('s_budget').value=d.budgetName||''; $('s_alias').value=d.aliases||'{}';
   $('s_pw').placeholder = d.hasPassword?'(inchangé)':'(vide)'; $('s_e2e').placeholder = d.hasE2e?'(inchangé)':'(vide)';
-  loadUsers();
+  if(IS_ADMIN) loadUsers();
 }
 $('s_save').onclick = async () => {
   $('s_msg').textContent='…';

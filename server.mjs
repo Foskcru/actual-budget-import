@@ -29,28 +29,35 @@ db.exec(`
     is_admin INTEGER DEFAULT 0,
     created TEXT
   );
-  CREATE TABLE IF NOT EXISTS settings ( key TEXT PRIMARY KEY, value TEXT );
+  CREATE TABLE IF NOT EXISTS user_settings (
+    user_id INTEGER NOT NULL,
+    key TEXT NOT NULL,
+    value TEXT,
+    PRIMARY KEY (user_id, key)
+  );
 `);
-const getSetting = (k, def = '') => { const r = db.prepare('SELECT value FROM settings WHERE key=?').get(k); return r ? r.value : def; };
-const setSetting = (k, v) => db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(k, String(v ?? ''));
+// Reglages PAR UTILISATEUR : chacun a sa propre config Actual (budget isole).
+const getSetting = (uid, k, def = '') => { const r = db.prepare('SELECT value FROM user_settings WHERE user_id=? AND key=?').get(uid, k); return r ? r.value : def; };
+const setSetting = (uid, k, v) => db.prepare('INSERT INTO user_settings(user_id,key,value) VALUES(?,?,?) ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value').run(uid, k, String(v ?? ''));
 const userCount = () => db.prepare('SELECT COUNT(*) c FROM users').get().c;
 
-// Seed des reglages depuis les variables d'env au tout premier demarrage
-if (!getSetting('serverURL') && process.env.ACTUAL_SERVER_URL) {
-  setSetting('serverURL', process.env.ACTUAL_SERVER_URL);
-  setSetting('password', process.env.ACTUAL_PASSWORD || '');
-  setSetting('syncId', process.env.ACTUAL_SYNC_ID || '');
-  setSetting('budgetName', process.env.ACTUAL_BUDGET_NAME || '');
-  setSetting('e2ePassword', process.env.ACTUAL_E2E_PASSWORD || '');
-  setSetting('aliases', process.env.ACTUAL_ALIASES || '{}');
-}
-function cfg() {
-  let aliases = {}; try { aliases = JSON.parse(getSetting('aliases', '{}')); } catch {}
+function cfg(uid) {
+  let aliases = {}; try { aliases = JSON.parse(getSetting(uid, 'aliases', '{}')); } catch {}
   return {
-    serverURL: getSetting('serverURL'), password: getSetting('password'),
-    syncId: getSetting('syncId'), budgetName: getSetting('budgetName'),
-    e2ePassword: getSetting('e2ePassword'), aliases,
+    serverURL: getSetting(uid, 'serverURL'), password: getSetting(uid, 'password'),
+    syncId: getSetting(uid, 'syncId'), budgetName: getSetting(uid, 'budgetName'),
+    e2ePassword: getSetting(uid, 'e2ePassword'), aliases,
   };
+}
+// Pre-remplit la config d'un utilisateur depuis les variables d'env (defaut au 1er admin)
+function seedUserFromEnv(uid) {
+  if (!process.env.ACTUAL_SERVER_URL) return;
+  setSetting(uid, 'serverURL', process.env.ACTUAL_SERVER_URL);
+  setSetting(uid, 'password', process.env.ACTUAL_PASSWORD || '');
+  setSetting(uid, 'syncId', process.env.ACTUAL_SYNC_ID || '');
+  setSetting(uid, 'budgetName', process.env.ACTUAL_BUDGET_NAME || '');
+  setSetting(uid, 'e2ePassword', process.env.ACTUAL_E2E_PASSWORD || '');
+  setSetting(uid, 'aliases', process.env.ACTUAL_ALIASES || '{}');
 }
 
 // ============================ auth ============================
@@ -180,23 +187,24 @@ const SEED_RULES = [
 
 // ============================ connexion Actual ============================
 let initialized = false, initedWith = null, busy = false;
-async function ensureInit() {
-  const c = cfg();
-  if (!c.serverURL || !c.password) throw new Error("Reglages manquants : renseigne l'URL et le mot de passe du serveur Actual dans Parametres.");
+async function ensureInit(uid) {
+  const c = cfg(uid);
+  if (!c.serverURL || !c.password) throw new Error("Reglages manquants : renseigne l'URL et le mot de passe du serveur Actual dans tes Parametres.");
   const key = c.serverURL + '|' + c.password;
   if (initialized && initedWith === key) return;
   if (initialized) { try { await api.shutdown(); } catch {} initialized = false; }
   await api.init({ dataDir: DATA_DIR, serverURL: c.serverURL, password: c.password });
   initialized = true; initedWith = key;
 }
-async function openBudget() {
-  await ensureInit();
-  const c = cfg();
+async function openBudget(uid) {
+  await ensureInit(uid);
+  const c = cfg(uid);
   const budgets = await api.getBudgets();
   let syncId = c.syncId;
   if (!syncId) {
+    if (!c.budgetName) throw new Error("Aucun budget cible : renseigne l'ID de synchronisation (ou le nom de budget) dans tes Parametres.");
     const b = budgets.find(x => norm(x.name) === norm(c.budgetName));
-    if (!b) throw new Error(`Budget "${c.budgetName}" introuvable et syncId vide.`);
+    if (!b) throw new Error(`Budget "${c.budgetName}" introuvable et ID de synchro vide.`);
     syncId = b.groupId || b.cloudFileId || b.id;
   }
   const dl = await api.downloadBudget(syncId, c.e2ePassword ? { password: c.e2ePassword } : undefined);
@@ -207,8 +215,7 @@ async function openBudget() {
   }
   return { budgets, syncId };
 }
-function findAccount(accounts, sumName) {
-  const aliases = cfg().aliases;
+function findAccount(accounts, sumName, aliases) {
   if (aliases[sumName]) { const t = accountKey(aliases[sumName]); const a = accounts.find(a => accountKey(a.name) === t); if (a) return a; }
   const key = accountKey(sumName);
   return accounts.find(a => { const k = accountKey(a.name); return k === key || k === key + 's' || k + 's' === key; });
@@ -227,7 +234,9 @@ app.post('/api/setup', (req, res) => {
   const { username, password } = req.body || {};
   if (!username || !password || password.length < 6) return res.status(400).json({ ok: false, error: 'Identifiant requis, mot de passe >= 6 caracteres.' });
   const info = db.prepare('INSERT INTO users(username,pass_hash,is_admin,created) VALUES(?,?,1,?)').run(username, hashPassword(password), new Date().toISOString());
-  const token = newSession({ id: Number(info.lastInsertRowid), username, is_admin: 1 });
+  const uid = Number(info.lastInsertRowid);
+  seedUserFromEnv(uid); // pre-remplit la config du 1er admin depuis les variables d'env
+  const token = newSession({ id: uid, username, is_admin: 1 });
   res.setHeader('Set-Cookie', `sid=${token}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${SESSION_MS / 1000}`);
   res.json({ ok: true, username, isAdmin: true });
 });
@@ -268,9 +277,9 @@ app.delete('/api/users/:id', requireAuth, requireAdmin, (req, res) => {
   res.json({ ok: true });
 });
 
-// --- Reglages (admin) ---
-app.get('/api/settings', requireAuth, requireAdmin, (_req, res) => {
-  const c = cfg();
+// --- Reglages PAR UTILISATEUR (chacun sa config Actual) ---
+app.get('/api/settings', requireAuth, (req, res) => {
+  const c = cfg(req.user.userId);
   res.json({
     ok: true,
     serverURL: c.serverURL, syncId: c.syncId, budgetName: c.budgetName,
@@ -278,25 +287,26 @@ app.get('/api/settings', requireAuth, requireAdmin, (_req, res) => {
     hasPassword: !!c.password, hasE2e: !!c.e2ePassword,   // secrets non renvoyes
   });
 });
-app.post('/api/settings', requireAuth, requireAdmin, (req, res) => {
+app.post('/api/settings', requireAuth, (req, res) => {
+  const uid = req.user.userId;
   const b = req.body || {};
-  if (b.serverURL !== undefined) setSetting('serverURL', b.serverURL.trim());
-  if (b.syncId !== undefined) setSetting('syncId', b.syncId.trim());
-  if (b.budgetName !== undefined) setSetting('budgetName', b.budgetName.trim());
-  if (b.aliases !== undefined) { try { JSON.parse(b.aliases || '{}'); setSetting('aliases', b.aliases || '{}'); } catch { return res.status(400).json({ ok: false, error: 'Aliases : JSON invalide.' }); } }
-  if (b.password) setSetting('password', b.password);       // mis a jour seulement si fourni
-  if (b.e2ePassword) setSetting('e2ePassword', b.e2ePassword);
-  if (b.clearE2e) setSetting('e2ePassword', '');
+  if (b.serverURL !== undefined) setSetting(uid, 'serverURL', b.serverURL.trim());
+  if (b.syncId !== undefined) setSetting(uid, 'syncId', b.syncId.trim());
+  if (b.budgetName !== undefined) setSetting(uid, 'budgetName', b.budgetName.trim());
+  if (b.aliases !== undefined) { try { JSON.parse(b.aliases || '{}'); setSetting(uid, 'aliases', b.aliases || '{}'); } catch { return res.status(400).json({ ok: false, error: 'Aliases : JSON invalide.' }); } }
+  if (b.password) setSetting(uid, 'password', b.password);
+  if (b.e2ePassword) setSetting(uid, 'e2ePassword', b.e2ePassword);
+  if (b.clearE2e) setSetting(uid, 'e2ePassword', '');
   initedWith = null; // force une reconnexion avec les nouveaux reglages
   res.json({ ok: true });
 });
 
 // --- Actual : statut / import / regles (auth) ---
-app.get('/api/status', requireAuth, async (_req, res) => {
+app.get('/api/status', requireAuth, async (req, res) => {
   if (busy) return res.status(409).json({ ok: false, error: 'Un traitement est deja en cours.' });
   busy = true;
   try {
-    const { budgets, syncId } = await openBudget();
+    const { budgets, syncId } = await openBudget(req.user.userId);
     let version = null;
     try { const v = await api.getServerVersion(); version = (v && typeof v === 'object') ? (v.version || JSON.stringify(v)) : v; } catch {}
     const accounts = await api.getAccounts();
@@ -323,12 +333,13 @@ app.post('/api/run', requireAuth, upload.array('files'), async (req, res) => {
     }
     if (!parsed.some(p => p.transactions)) { busy = false; return res.json({ ok: true, dryRun, results: parsed.map(p => ({ file: p.file, skipped: p.skipped })) }); }
 
-    await openBudget();
+    await openBudget(req.user.userId);
     const accounts = await api.getAccounts();
+    const aliases = cfg(req.user.userId).aliases;
     const results = [];
     for (const p of parsed) {
       if (!p.transactions) { results.push({ file: p.file, skipped: p.skipped }); continue; }
-      const acc = findAccount(accounts, p.account);
+      const acc = findAccount(accounts, p.account, aliases);
       if (!acc) { results.push({ file: p.file, account: p.account, count: p.transactions.length, matched: false }); continue; }
       const base = { file: p.file, account: p.account, mapped: acc.name, count: p.transactions.length, matched: true,
         sample: p.transactions.slice(0, 3).map(t => `${t.date}  ${(t.amount / 100).toFixed(2)}€  ${t.payee_name || '(sans bénéficiaire)'}`) };
@@ -350,11 +361,11 @@ app.post('/api/run', requireAuth, upload.array('files'), async (req, res) => {
   finally { busy = false; }
 });
 
-app.post('/api/seed-rules', requireAuth, async (_req, res) => {
+app.post('/api/seed-rules', requireAuth, async (req, res) => {
   if (busy) return res.status(409).json({ ok: false, error: 'Un traitement est deja en cours.' });
   busy = true;
   try {
-    await openBudget();
+    await openBudget(req.user.userId);
     const cats = await api.getCategories();
     const catByName = new Map(cats.map(c => [norm(c.name), c.id]));
     const rules = await api.getRules();
