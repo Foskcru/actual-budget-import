@@ -49,6 +49,20 @@ function cfg(uid) {
     e2ePassword: getSetting(uid, 'e2ePassword'), aliases,
   };
 }
+// Migration : anciens reglages GLOBAUX (table settings) -> config du 1er admin
+try {
+  const hasOld = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='settings'").get();
+  if (hasOld) {
+    const admin = db.prepare('SELECT id FROM users WHERE is_admin=1 ORDER BY id LIMIT 1').get();
+    const oldRows = db.prepare('SELECT key,value FROM settings').all();
+    if (admin && oldRows.length) {
+      const already = db.prepare('SELECT COUNT(*) c FROM user_settings WHERE user_id=?').get(admin.id).c;
+      if (!already) for (const r of oldRows) setSetting(admin.id, r.key, r.value);
+    }
+    db.exec('DROP TABLE settings');
+  }
+} catch {}
+
 // Pre-remplit la config d'un utilisateur depuis les variables d'env (defaut au 1er admin)
 function seedUserFromEnv(uid) {
   if (!process.env.ACTUAL_SERVER_URL) return;
