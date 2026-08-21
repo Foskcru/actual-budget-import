@@ -272,6 +272,16 @@ app.post('/api/logout', (req, res) => {
 
 app.get('/api/me', requireAuth, (req, res) => res.json({ ok: true, username: req.user.username, isAdmin: req.user.isAdmin }));
 
+// Changer son propre mot de passe
+app.post('/api/change-password', requireAuth, (req, res) => {
+  const { currentPassword, newPassword } = req.body || {};
+  if (!newPassword || newPassword.length < 6) return res.status(400).json({ ok: false, error: 'Nouveau mot de passe : 6 caracteres minimum.' });
+  const u = db.prepare('SELECT * FROM users WHERE id=?').get(req.user.userId);
+  if (!u || !verifyPassword(String(currentPassword || ''), u.pass_hash)) return res.status(401).json({ ok: false, error: 'Mot de passe actuel incorrect.' });
+  db.prepare('UPDATE users SET pass_hash=? WHERE id=?').run(hashPassword(newPassword), u.id);
+  res.json({ ok: true });
+});
+
 // --- Gestion des utilisateurs (admin) ---
 app.get('/api/users', requireAuth, requireAdmin, (_req, res) => {
   res.json({ ok: true, users: db.prepare('SELECT id,username,is_admin,created FROM users ORDER BY id').all() });

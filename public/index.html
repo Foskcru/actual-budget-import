@@ -67,6 +67,16 @@
       <div><label class="mini">Aliases (JSON)</label><input type="text" id="s_alias" placeholder='{"Anniversaire":"SUM Anniversaires"}'></div>
     </div>
     <div class="row" style="margin-top:12px"><button id="s_save">Enregistrer</button><span id="s_msg" class="mini"></span></div>
+
+    <hr style="border:0;border-top:1px solid var(--line);margin:18px 0">
+    <b>Mon mot de passe</b>
+    <div class="row" style="gap:8px;margin-top:8px">
+      <input type="password" id="p_cur" placeholder="mot de passe actuel" style="max-width:170px">
+      <input type="password" id="p_new" placeholder="nouveau (min. 6)" style="max-width:170px">
+      <button class="ghost" id="p_btn">Changer</button>
+      <span id="p_msg" class="mini"></span>
+    </div>
+
     <div id="usersBlock" style="display:none">
       <hr style="border:0;border-top:1px solid var(--line);margin:18px 0">
       <b>Utilisateurs</b> <span class="mini">(admin)</span>
@@ -171,9 +181,15 @@ $('s_save').onclick = async () => {
 };
 async function loadUsers(){
   const d = await (await fetch('/api/users')).json(); if(!d.ok) return;
-  $('userList').innerHTML = d.users.map(u=>`${esc(u.username)}${u.is_admin?' · admin':''} <a href="#" data-id="${u.id}" class="del">✕</a>`).join('<br>');
-  document.querySelectorAll('.del').forEach(a=>a.onclick=async e=>{e.preventDefault(); if(confirm('Supprimer cet utilisateur ?')){ await fetch('/api/users/'+a.dataset.id,{method:'DELETE'}); loadUsers(); }});
+  $('userList').innerHTML = d.users.map(u=>`${esc(u.username)}${u.is_admin?' · admin':''} <a href="#" data-id="${u.id}" data-name="${esc(u.username)}" class="del">✕</a>`).join('<br>');
+  document.querySelectorAll('.del').forEach(a=>a.onclick=async e=>{e.preventDefault(); if(confirm('Supprimer l\'utilisateur « '+a.dataset.name+' » ?')){ await fetch('/api/users/'+a.dataset.id,{method:'DELETE'}); loadUsers(); }});
 }
+$('p_btn').onclick = async () => {
+  $('p_msg').textContent = '…';
+  const d = await (await fetch('/api/change-password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({currentPassword:$('p_cur').value,newPassword:$('p_new').value})})).json();
+  $('p_msg').textContent = d.ok ? 'Modifié ✓' : ('Erreur : '+d.error);
+  if(d.ok){ $('p_cur').value=''; $('p_new').value=''; }
+};
 $('u_add').onclick = async () => {
   const d = await (await fetch('/api/users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:$('u_name').value,password:$('u_pw').value,isAdmin:$('u_admin').checked})})).json();
   if(d.ok){ $('u_name').value=''; $('u_pw').value=''; $('u_admin').checked=false; loadUsers(); } else alert(d.error);
