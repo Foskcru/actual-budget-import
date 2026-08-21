@@ -11,6 +11,7 @@ sans doublon — via l'API officielle d'Actual.
 
 ## Fonctionnalités
 
+- 🔐 **Comptes utilisateurs** (login/mot de passe, base SQLite) + **réglages Actual dans l'UI**
 - 📥 **Glisser-déposer** de plusieurs relevés Sumeria (CSV bruts, aucun pré-traitement)
 - 🏦 **Détection du compte** via la ligne `Nom du compte` du CSV (préfixe `SUM`/`BNP` toléré, singulier/pluriel accepté)
 - 🔁 **Déduplication** par « Réf. interne » Sumeria → relançable sans créer de doublon
@@ -50,20 +51,28 @@ docker compose up -d --build
 
 Puis ouvre `http://IP-DU-NAS:8092`.
 
-## Configuration (variables d'environnement)
+## Comptes & configuration
 
-| Variable | Obligatoire | Description |
-|---|---|---|
-| `ACTUAL_SERVER_URL` | ✅ | URL de ton serveur Actual |
-| `ACTUAL_PASSWORD` | ✅ | Mot de passe du serveur Actual |
-| `ACTUAL_SYNC_ID` | ✅* | ID de synchronisation du budget (*Paramètres → Avancé*) |
-| `ACTUAL_BUDGET_NAME` | ✅* | Alternative à `SYNC_ID` : cibler par nom de budget |
-| `ACTUAL_E2E_PASSWORD` | — | Mot de passe de chiffrement, si le budget est *end-to-end encrypted* |
-| `ACTUAL_ALIASES` | — | JSON de correspondances de comptes, ex. `{"Anniversaire":"SUM Anniversaires"}` |
-| `PORT` | — | Port interne (défaut `3000`) |
-| `DATA_DIR` | — | Cache local du budget (défaut `/data`) |
+- **1ʳᵉ visite** : la page te demande de créer le **compte administrateur** (identifiant + mot de passe).
+- Ensuite, connexion obligatoire pour accéder à l'app.
+- L'admin ouvre **Paramètres** pour saisir la config Actual (URL serveur, mot de passe, ID de synchro, mot de passe de chiffrement…) — **directement dans l'interface**, pas besoin de toucher au compose.
+- L'admin peut créer **d'autres comptes** utilisateurs.
 
-\* Renseigner **`ACTUAL_SYNC_ID`** *ou* **`ACTUAL_BUDGET_NAME`**.
+Les utilisateurs et les réglages sont stockés dans une base **SQLite** (`app.db`) dans le volume `/data` — **pense à le persister**.
+
+### Variables d'environnement (toutes optionnelles)
+Elles servent seulement de **valeurs par défaut** au tout premier démarrage (pratique pour pré-remplir). Ensuite tout se gère dans l'UI.
+
+| Variable | Description |
+|---|---|
+| `ACTUAL_SERVER_URL` | URL du serveur Actual (défaut de réglage) |
+| `ACTUAL_PASSWORD` | Mot de passe du serveur Actual |
+| `ACTUAL_SYNC_ID` | ID de synchronisation du budget (*Paramètres → Avancé*) |
+| `ACTUAL_BUDGET_NAME` | Alternative à `SYNC_ID` : nom de budget |
+| `ACTUAL_E2E_PASSWORD` | Mot de passe de chiffrement (budget *end-to-end encrypted*) |
+| `ACTUAL_ALIASES` | JSON de correspondances, ex. `{"Anniversaire":"SUM Anniversaires"}` |
+| `PORT` | Port interne (défaut `3000`) |
+| `DATA_DIR` | Dossier de données : DB + cache budget (défaut `/data`) |
 
 > ⚠️ La version de l'API (`@actual-app/api`) doit correspondre à celle de ton serveur Actual.
 > Ce dépôt cible **26.8.1** — adapte `package.json` + rebuild si tu mets Actual à jour.

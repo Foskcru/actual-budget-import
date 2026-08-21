@@ -33,12 +33,49 @@
   .tag-skip{color:var(--warn)}
   .mini{color:var(--muted);font-size:12px}
   code{background:var(--soft);padding:1px 5px;border-radius:4px}
+  .topbar{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:20px}
+  .userbar{display:flex;gap:8px;align-items:center;flex-shrink:0}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  @media(max-width:640px){.grid2{grid-template-columns:1fr}}
+  input[type=text],input[type=password],.grid2 input{width:100%;padding:9px 11px;border-radius:8px;border:1px solid var(--line);background:var(--soft);color:var(--ink);font-size:14px}
+  a.del{color:var(--err);text-decoration:none;margin-left:6px}
 </style>
 </head>
 <body>
 <div class="wrap">
-  <h1>Import Sumeria → Actual</h1>
-  <p class="sub">Dépose tes relevés Sumeria (CSV bruts). Chaque fichier est envoyé dans le bon compte, sans doublon.</p>
+  <div class="topbar">
+    <div>
+      <h1>Import Sumeria → Actual</h1>
+      <p class="sub" style="margin-bottom:0">Dépose tes relevés Sumeria (CSV bruts). Chaque fichier est envoyé dans le bon compte, sans doublon.</p>
+    </div>
+    <div class="userbar">
+      <span id="who" class="mini"></span>
+      <button class="ghost" id="btnSettings" style="display:none">Paramètres</button>
+      <button class="ghost" id="btnLogout">Déconnexion</button>
+    </div>
+  </div>
+
+  <div class="card" id="settingsCard" style="display:none">
+    <b>Paramètres de connexion Actual</b>
+    <div class="grid2" style="margin-top:12px">
+      <div><label class="mini">URL du serveur</label><input type="text" id="s_url" placeholder="https://actual..."></div>
+      <div><label class="mini">ID de synchronisation (budget)</label><input type="text" id="s_sync" placeholder="ea76be7f-..."></div>
+      <div><label class="mini">Mot de passe serveur</label><input type="password" id="s_pw" placeholder="(inchangé)"></div>
+      <div><label class="mini">Mot de passe de chiffrement</label><input type="password" id="s_e2e" placeholder="(inchangé)"></div>
+      <div><label class="mini">Nom de budget (si pas d'ID)</label><input type="text" id="s_budget" placeholder="Budget EC"></div>
+      <div><label class="mini">Aliases (JSON)</label><input type="text" id="s_alias" placeholder='{"Anniversaire":"SUM Anniversaires"}'></div>
+    </div>
+    <div class="row" style="margin-top:12px"><button id="s_save">Enregistrer</button><span id="s_msg" class="mini"></span></div>
+    <hr style="border:0;border-top:1px solid var(--line);margin:18px 0">
+    <b>Utilisateurs</b>
+    <div id="userList" class="mini" style="margin:8px 0"></div>
+    <div class="row" style="gap:8px">
+      <input type="text" id="u_name" placeholder="identifiant" style="max-width:150px">
+      <input type="password" id="u_pw" placeholder="mot de passe" style="max-width:150px">
+      <label class="chk"><input type="checkbox" id="u_admin"> admin</label>
+      <button class="ghost" id="u_add">Ajouter</button>
+    </div>
+  </div>
 
   <div class="card">
     <div class="row" style="justify-content:space-between">
@@ -96,6 +133,45 @@ function renderFiles(){
   $('fileList').textContent = files.length ? `${files.length} fichier(s) : ` + files.map(f=>f.name).join(', ') : '';
   $('btnRun').disabled = files.length === 0;
 }
+
+// --- authentification ---
+(async function guard(){
+  try {
+    const m = await (await fetch('/api/me')).json();
+    if(!m.ok){ location.href='/login.html'; return; }
+    $('who').textContent = m.username + (m.isAdmin ? ' · admin' : '');
+    if(m.isAdmin) $('btnSettings').style.display='';
+  } catch { location.href='/login.html'; }
+})();
+$('btnLogout').onclick = async () => { await fetch('/api/logout',{method:'POST'}); location.href='/login.html'; };
+$('btnSettings').onclick = () => {
+  const c = $('settingsCard'); const show = c.style.display==='none';
+  c.style.display = show ? '' : 'none'; if(show) loadSettings();
+};
+async function loadSettings(){
+  const d = await (await fetch('/api/settings')).json(); if(!d.ok) return;
+  $('s_url').value=d.serverURL||''; $('s_sync').value=d.syncId||''; $('s_budget').value=d.budgetName||''; $('s_alias').value=d.aliases||'{}';
+  $('s_pw').placeholder = d.hasPassword?'(inchangé)':'(vide)'; $('s_e2e').placeholder = d.hasE2e?'(inchangé)':'(vide)';
+  loadUsers();
+}
+$('s_save').onclick = async () => {
+  $('s_msg').textContent='…';
+  const body = { serverURL:$('s_url').value, syncId:$('s_sync').value, budgetName:$('s_budget').value, aliases:$('s_alias').value };
+  if($('s_pw').value) body.password=$('s_pw').value;
+  if($('s_e2e').value) body.e2ePassword=$('s_e2e').value;
+  const d = await (await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+  $('s_msg').textContent = d.ok ? 'Enregistré ✓' : ('Erreur : '+d.error);
+  $('s_pw').value=''; $('s_e2e').value='';
+};
+async function loadUsers(){
+  const d = await (await fetch('/api/users')).json(); if(!d.ok) return;
+  $('userList').innerHTML = d.users.map(u=>`${esc(u.username)}${u.is_admin?' · admin':''} <a href="#" data-id="${u.id}" class="del">✕</a>`).join('<br>');
+  document.querySelectorAll('.del').forEach(a=>a.onclick=async e=>{e.preventDefault(); if(confirm('Supprimer cet utilisateur ?')){ await fetch('/api/users/'+a.dataset.id,{method:'DELETE'}); loadUsers(); }});
+}
+$('u_add').onclick = async () => {
+  const d = await (await fetch('/api/users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:$('u_name').value,password:$('u_pw').value,isAdmin:$('u_admin').checked})})).json();
+  if(d.ok){ $('u_name').value=''; $('u_pw').value=''; $('u_admin').checked=false; loadUsers(); } else alert(d.error);
+};
 
 $('btnStatus').onclick = async () => {
   $('status').innerHTML = 'Test en cours…';

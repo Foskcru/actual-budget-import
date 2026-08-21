@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Connexion · Import Sumeria → Actual</title>
+<style>
+  :root{--bg:#0f1420;--card:#171d2b;--ink:#e7eaf0;--muted:#97a0b3;--line:#262e3f;--accent:#4f7cff;--err:#d1495b;--soft:#1b2440;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;
+       display:flex;min-height:100vh;align-items:center;justify-content:center;padding:20px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:26px;width:100%;max-width:380px}
+  h1{font-size:20px;margin:0 0 4px}
+  p.sub{color:var(--muted);margin:0 0 20px;font-size:13px}
+  label{display:block;font-size:13px;color:var(--muted);margin:12px 0 5px}
+  input{width:100%;padding:10px 12px;border-radius:8px;border:1px solid var(--line);background:var(--soft);color:var(--ink);font-size:15px}
+  button{width:100%;margin-top:18px;background:var(--accent);color:#fff;border:0;border-radius:8px;padding:11px;font-size:15px;font-weight:600;cursor:pointer}
+  button:disabled{opacity:.5}
+  .err{color:var(--err);font-size:13px;margin-top:12px;min-height:18px}
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1 id="title">Connexion</h1>
+    <p class="sub" id="sub">Import Sumeria → Actual</p>
+    <form id="form">
+      <label>Identifiant</label>
+      <input id="username" autocomplete="username" required>
+      <label>Mot de passe</label>
+      <input id="password" type="password" autocomplete="current-password" required>
+      <button id="btn" type="submit">Se connecter</button>
+      <div class="err" id="err"></div>
+    </form>
+  </div>
+<script>
+let setup = false;
+const $ = id => document.getElementById(id);
+async function init(){
+  try {
+    const d = await (await fetch('/api/needs-setup')).json();
+    setup = !!d.needsSetup;
+    if(setup){
+      $('title').textContent = 'Créer le compte admin';
+      $('sub').textContent = 'Première utilisation : choisis tes identifiants.';
+      $('btn').textContent = 'Créer le compte';
+      $('password').autocomplete = 'new-password';
+    }
+  } catch {}
+  // deja connecte ? -> app
+  try { const m = await (await fetch('/api/me')).json(); if(m.ok) location.href = '/'; } catch {}
+}
+$('form').onsubmit = async (e) => {
+  e.preventDefault(); $('btn').disabled = true; $('err').textContent = '';
+  try {
+    const body = JSON.stringify({ username: $('username').value, password: $('password').value });
+    const r = await fetch(setup ? '/api/setup' : '/api/login', { method:'POST', headers:{'Content-Type':'application/json'}, body });
+    const d = await r.json();
+    if(!d.ok) throw new Error(d.error || 'Échec');
+    location.href = '/';
+  } catch(err){ $('err').textContent = err.message; $('btn').disabled = false; }
+};
+init();
+</script>
+</body>
+</html>

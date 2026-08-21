@@ -1,4 +1,4 @@
-FROM node:22-slim
+FROM node:24-slim
 
 # Dependances de build (au cas ou un module natif doit se compiler)
 RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ \
@@ -20,4 +20,4 @@ ENV DATA_DIR=/data
 EXPOSE 3000
 VOLUME ["/data"]
 
-CMD ["node", "server.mjs"]
+CMD ["node", "--experimental-sqlite", "server.mjs"]

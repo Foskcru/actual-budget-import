@@ -4,7 +4,7 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "start": "node server.mjs"
+    "start": "node --experimental-sqlite server.mjs"
   },
   "dependencies": {
     "@actual-app/api": "26.8.1",

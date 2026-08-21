@@ -1,43 +1,91 @@
 // ============================================================================
-//  Sumeria -> Actual : interface web d'import (conteneur a cote d'Actual)
-//  Upload de releves Sumeria bruts -> parse -> preview / import via l'API Actual.
+//  Sumeria -> Actual : interface web d'import + comptes utilisateurs + reglages
+//  - login/mot de passe (SQLite, mot de passe hashe scrypt, session cookie)
+//  - reglages Actual editables dans l'UI (stockes en base, defaut = env)
+//  - upload de releves Sumeria -> parse -> preview / import via l'API Actual
 // ============================================================================
 import express from 'express';
 import multer from 'multer';
 import * as api from '@actual-app/api';
+import { DatabaseSync } from 'node:sqlite';
+import crypto from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-// ---------- config (variables d'environnement, definies dans docker-compose) ----------
-const SERVER_URL = process.env.ACTUAL_SERVER_URL;
-const PASSWORD   = process.env.ACTUAL_PASSWORD;
-const SYNC_ID    = process.env.ACTUAL_SYNC_ID || '';
-const BUDGET_NAME= process.env.ACTUAL_BUDGET_NAME || '';
-const E2E_PASSWORD = process.env.ACTUAL_E2E_PASSWORD || ''; // mot de passe de chiffrement (budget end-to-end encrypted)
-const DATA_DIR   = process.env.DATA_DIR || path.join(__dirname, 'data');
-const PORT       = process.env.PORT || 3000;
-let ALIASES = {};
-try { if (process.env.ACTUAL_ALIASES) ALIASES = JSON.parse(process.env.ACTUAL_ALIASES); } catch {}
-
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
+const PORT = process.env.PORT || 3000;
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
-// Regles de demarrage : [mot-cle dans les Notes, nom de categorie]. A affiner ensuite dans Actual.
-const SEED_RULES = [
-  ['CARREFOUR', 'Alimentation'], ['MONOPRIX', 'Alimentation'], ['FRANPRIX', 'Alimentation'],
-  ['LIDL', 'Alimentation'], ['AUCHAN', 'Alimentation'], ['INTERMARCHE', 'Alimentation'],
-  ['BOULANGERIE', 'Alimentation'],
-  ['MCDO', 'Restaurants'], ['MCDONALD', 'Restaurants'], ['DELIVEROO', 'Restaurants'],
-  ['UBER EATS', 'Restaurants'], ['SUSHI', 'Restaurants'], ['SWILE', 'Restaurants'], ['BURGER', 'Restaurants'],
-  ['PATHE', 'Sorties'], ['CINE', 'Sorties'], ['ACHATBILLETCINE', 'Sorties'],
-  ['AMAZON', 'Shopping / Vêtements'], ['VINTED', 'Shopping / Vêtements'], ['ZALANDO', 'Shopping / Vêtements'],
-  ['ACTION', 'Shopping / Vêtements'],
-  ['APPLE.COM', 'Abonnements'], ['NETFLIX', 'Abonnements'], ['SPOTIFY', 'Abonnements'], ['YOUTUBE', 'Abonnements'],
-  ['SNCF', 'Transport'], ['TOTAL', 'Transport'], ['ESSO', 'Transport'], ['CARBURANT', 'Transport'], ['UBER ', 'Transport'],
-  ['PHARMACIE', 'Santé'],
-];
+// ============================ base de donnees ============================
+const db = new DatabaseSync(path.join(DATA_DIR, 'app.db'));
+db.exec('PRAGMA journal_mode = WAL;');
+db.exec(`
+  CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT UNIQUE NOT NULL,
+    pass_hash TEXT NOT NULL,
+    is_admin INTEGER DEFAULT 0,
+    created TEXT
+  );
+  CREATE TABLE IF NOT EXISTS settings ( key TEXT PRIMARY KEY, value TEXT );
+`);
+const getSetting = (k, def = '') => { const r = db.prepare('SELECT value FROM settings WHERE key=?').get(k); return r ? r.value : def; };
+const setSetting = (k, v) => db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(k, String(v ?? ''));
+const userCount = () => db.prepare('SELECT COUNT(*) c FROM users').get().c;
+
+// Seed des reglages depuis les variables d'env au tout premier demarrage
+if (!getSetting('serverURL') && process.env.ACTUAL_SERVER_URL) {
+  setSetting('serverURL', process.env.ACTUAL_SERVER_URL);
+  setSetting('password', process.env.ACTUAL_PASSWORD || '');
+  setSetting('syncId', process.env.ACTUAL_SYNC_ID || '');
+  setSetting('budgetName', process.env.ACTUAL_BUDGET_NAME || '');
+  setSetting('e2ePassword', process.env.ACTUAL_E2E_PASSWORD || '');
+  setSetting('aliases', process.env.ACTUAL_ALIASES || '{}');
+}
+function cfg() {
+  let aliases = {}; try { aliases = JSON.parse(getSetting('aliases', '{}')); } catch {}
+  return {
+    serverURL: getSetting('serverURL'), password: getSetting('password'),
+    syncId: getSetting('syncId'), budgetName: getSetting('budgetName'),
+    e2ePassword: getSetting('e2ePassword'), aliases,
+  };
+}
+
+// ============================ auth ============================
+function hashPassword(pw) {
+  const salt = crypto.randomBytes(16);
+  const dk = crypto.scryptSync(pw, salt, 64);
+  return `scrypt$${salt.toString('hex')}$${dk.toString('hex')}`;
+}
+function verifyPassword(pw, stored) {
+  try {
+    const [, saltHex, hashHex] = stored.split('$');
+    const dk = crypto.scryptSync(pw, Buffer.from(saltHex, 'hex'), 64);
+    return crypto.timingSafeEqual(dk, Buffer.from(hashHex, 'hex'));
+  } catch { return false; }
+}
+const sessions = new Map(); // token -> { userId, username, isAdmin, exp }
+const SESSION_MS = 7 * 24 * 3600 * 1000;
+function newSession(u) {
+  const t = crypto.randomBytes(24).toString('hex');
+  sessions.set(t, { userId: u.id, username: u.username, isAdmin: !!u.is_admin, exp: Date.now() + SESSION_MS });
+  return t;
+}
+function getCookie(req, name) {
+  const h = req.headers.cookie || '';
+  const m = h.match(new RegExp('(?:^|; )' + name + '=([^;]*)'));
+  return m ? decodeURIComponent(m[1]) : null;
+}
+function sessionOf(req) {
+  const t = getCookie(req, 'sid'); if (!t) return null;
+  const s = sessions.get(t); if (!s) return null;
+  if (s.exp < Date.now()) { sessions.delete(t); return null; }
+  return { token: t, ...s };
+}
+function requireAuth(req, res, next) { const s = sessionOf(req); if (!s) return res.status(401).json({ ok: false, error: 'non authentifie' }); req.user = s; next(); }
+function requireAdmin(req, res, next) { if (!req.user?.isAdmin) return res.status(403).json({ ok: false, error: 'admin requis' }); next(); }
 
 // ============================ parseur Sumeria ============================
 const YEAR_RE = /Du\s+\d{1,2}\/\d{1,2}\/(\d{4})/;
@@ -75,7 +123,6 @@ function toISO(dstr, year) {
   let yy = m[3] || year; if (yy && yy.length === 2) yy = '20' + yy;
   return yy ? `${yy}-${mm}-${dd}` : null;
 }
-// Extrait un beneficiaire propre depuis le libelle ; null si rien de clair.
 function extractPayee(firstLine) {
   let s = String(firstLine || '').replace(/\s+/g, ' ').trim();
   let m;
@@ -83,11 +130,10 @@ function extractPayee(firstLine) {
   else if ((m = s.match(/Remboursement\s+de\s+(.+?)\s+sur\s+carte\b/i))) s = m[1];
   else if ((m = s.match(/Virement\s+SEPA\s+re[çc]u\s+de\s+(.+)$/i))) s = m[1].replace(/\s+pour\s.*$/i, '');
   else if ((m = s.match(/Virement\s+interne\s+\S+\s*-\s*(.+)$/i))) s = m[1].replace(/\s*\(.*\)\s*$/, '');
-  else return null; // Virement SEPA emis vers IBAN, ou inconnu -> beneficiaire vide
-  s = s.replace(/\s+\d{3,}$/, '').replace(/\s+/g, ' ').trim(); // enleve un ref numerique final
+  else return null;
+  s = s.replace(/\s+\d{3,}$/, '').replace(/\s+/g, ' ').trim();
   return s || null;
 }
-
 function parseSumeria(text) {
   const rawLines = text.replace(/\r\n/g, '\n').split('\n');
   let account = null;
@@ -109,8 +155,8 @@ function parseSumeria(text) {
     let dcount = 0; while (dcount < n && /^\d{1,2}\/\d{1,2}(\/\d{2,4})?$/.test(String(r[dcount]).trim())) dcount++;
     const desc = r.slice(dcount, n - 3).join(' ').replace(/\s*\n\s*/g, '\n').trim();
     const descLines = desc.split('\n').map(x => x.trim()).filter(Boolean);
-    const notes = descLines.join(' | ') || null;   // libelle+refs conserves dans Notes
-    const payee = extractPayee(descLines[0]);       // beneficiaire propre (ou null)
+    const notes = descLines.join(' | ') || null;
+    const payee = extractPayee(descLines[0]);
     const refInt = desc.match(/interne\s*:\s*([0-9a-fA-F-]{8,})/);
     const tx = { date: iso, amount, notes, imported_id: refInt ? refInt[1] : undefined, cleared: true };
     if (payee) tx.payee_name = payee;
@@ -119,60 +165,154 @@ function parseSumeria(text) {
   return { account, transactions };
 }
 
+// Regles de demarrage : [mot-cle dans les Notes, nom de categorie]
+const SEED_RULES = [
+  ['CARREFOUR', 'Alimentation'], ['MONOPRIX', 'Alimentation'], ['FRANPRIX', 'Alimentation'],
+  ['LIDL', 'Alimentation'], ['AUCHAN', 'Alimentation'], ['INTERMARCHE', 'Alimentation'], ['BOULANGERIE', 'Alimentation'],
+  ['MCDO', 'Restaurants'], ['MCDONALD', 'Restaurants'], ['DELIVEROO', 'Restaurants'], ['UBER EATS', 'Restaurants'],
+  ['SUSHI', 'Restaurants'], ['SWILE', 'Restaurants'], ['BURGER', 'Restaurants'],
+  ['PATHE', 'Sorties'], ['CINE', 'Sorties'], ['ACHATBILLETCINE', 'Sorties'],
+  ['AMAZON', 'Shopping / Vêtements'], ['VINTED', 'Shopping / Vêtements'], ['ZALANDO', 'Shopping / Vêtements'], ['ACTION', 'Shopping / Vêtements'],
+  ['APPLE.COM', 'Abonnements'], ['NETFLIX', 'Abonnements'], ['SPOTIFY', 'Abonnements'], ['YOUTUBE', 'Abonnements'],
+  ['SNCF', 'Transport'], ['TOTAL', 'Transport'], ['ESSO', 'Transport'], ['CARBURANT', 'Transport'], ['UBER ', 'Transport'],
+  ['PHARMACIE', 'Santé'],
+];
+
 // ============================ connexion Actual ============================
-let initialized = false, busy = false;
+let initialized = false, initedWith = null, busy = false;
 async function ensureInit() {
-  if (initialized) return;
-  if (!SERVER_URL || !PASSWORD) throw new Error("ACTUAL_SERVER_URL / ACTUAL_PASSWORD manquants (docker-compose).");
-  await api.init({ dataDir: DATA_DIR, serverURL: SERVER_URL, password: PASSWORD });
-  initialized = true;
-}
-async function resolveSyncId(budgets) {
-  if (SYNC_ID) return SYNC_ID;
-  const b = budgets.find(x => norm(x.name) === norm(BUDGET_NAME));
-  if (!b) throw new Error(`Budget "${BUDGET_NAME}" introuvable et ACTUAL_SYNC_ID vide.`);
-  return b.groupId || b.cloudFileId || b.id;
+  const c = cfg();
+  if (!c.serverURL || !c.password) throw new Error("Reglages manquants : renseigne l'URL et le mot de passe du serveur Actual dans Parametres.");
+  const key = c.serverURL + '|' + c.password;
+  if (initialized && initedWith === key) return;
+  if (initialized) { try { await api.shutdown(); } catch {} initialized = false; }
+  await api.init({ dataDir: DATA_DIR, serverURL: c.serverURL, password: c.password });
+  initialized = true; initedWith = key;
 }
 async function openBudget() {
   await ensureInit();
+  const c = cfg();
   const budgets = await api.getBudgets();
-  const syncId = await resolveSyncId(budgets);
-  await api.downloadBudget(syncId, E2E_PASSWORD ? { password: E2E_PASSWORD } : undefined);
+  let syncId = c.syncId;
+  if (!syncId) {
+    const b = budgets.find(x => norm(x.name) === norm(c.budgetName));
+    if (!b) throw new Error(`Budget "${c.budgetName}" introuvable et syncId vide.`);
+    syncId = b.groupId || b.cloudFileId || b.id;
+  }
+  const dl = await api.downloadBudget(syncId, c.e2ePassword ? { password: c.e2ePassword } : undefined);
+  if (dl && dl.error) {
+    const msg = String(dl.error);
+    if (/key|decrypt/i.test(msg)) throw new Error("Budget chiffre : renseigne le mot de passe de chiffrement (Parametres).");
+    throw new Error('Ouverture du budget impossible : ' + msg);
+  }
   return { budgets, syncId };
 }
 function findAccount(accounts, sumName) {
-  if (ALIASES[sumName]) { const t = accountKey(ALIASES[sumName]); const a = accounts.find(a => accountKey(a.name) === t); if (a) return a; }
+  const aliases = cfg().aliases;
+  if (aliases[sumName]) { const t = accountKey(aliases[sumName]); const a = accounts.find(a => accountKey(a.name) === t); if (a) return a; }
   const key = accountKey(sumName);
   return accounts.find(a => { const k = accountKey(a.name); return k === key || k === key + 's' || k + 's' === key; });
 }
 
 // ============================ serveur web ============================
 const app = express();
+app.use(express.json());
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
-app.use(express.static(path.join(__dirname, 'public')));
 
-app.get('/api/status', async (_req, res) => {
+// --- Auth : setup / login / logout / me ---
+app.get('/api/needs-setup', (_req, res) => res.json({ needsSetup: userCount() === 0 }));
+
+app.post('/api/setup', (req, res) => {
+  if (userCount() > 0) return res.status(403).json({ ok: false, error: 'Deja configure.' });
+  const { username, password } = req.body || {};
+  if (!username || !password || password.length < 6) return res.status(400).json({ ok: false, error: 'Identifiant requis, mot de passe >= 6 caracteres.' });
+  const info = db.prepare('INSERT INTO users(username,pass_hash,is_admin,created) VALUES(?,?,1,?)').run(username, hashPassword(password), new Date().toISOString());
+  const token = newSession({ id: Number(info.lastInsertRowid), username, is_admin: 1 });
+  res.setHeader('Set-Cookie', `sid=${token}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${SESSION_MS / 1000}`);
+  res.json({ ok: true, username, isAdmin: true });
+});
+
+app.post('/api/login', (req, res) => {
+  const { username, password } = req.body || {};
+  const u = db.prepare('SELECT * FROM users WHERE username=?').get(String(username || ''));
+  if (!u || !verifyPassword(String(password || ''), u.pass_hash)) return res.status(401).json({ ok: false, error: 'Identifiant ou mot de passe incorrect.' });
+  const token = newSession(u);
+  res.setHeader('Set-Cookie', `sid=${token}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${SESSION_MS / 1000}`);
+  res.json({ ok: true, username: u.username, isAdmin: !!u.is_admin });
+});
+
+app.post('/api/logout', (req, res) => {
+  const s = sessionOf(req); if (s) sessions.delete(s.token);
+  res.setHeader('Set-Cookie', 'sid=; HttpOnly; Path=/; Max-Age=0');
+  res.json({ ok: true });
+});
+
+app.get('/api/me', requireAuth, (req, res) => res.json({ ok: true, username: req.user.username, isAdmin: req.user.isAdmin }));
+
+// --- Gestion des utilisateurs (admin) ---
+app.get('/api/users', requireAuth, requireAdmin, (_req, res) => {
+  res.json({ ok: true, users: db.prepare('SELECT id,username,is_admin,created FROM users ORDER BY id').all() });
+});
+app.post('/api/users', requireAuth, requireAdmin, (req, res) => {
+  const { username, password, isAdmin } = req.body || {};
+  if (!username || !password || password.length < 6) return res.status(400).json({ ok: false, error: 'Identifiant requis, mot de passe >= 6 caracteres.' });
+  try {
+    db.prepare('INSERT INTO users(username,pass_hash,is_admin,created) VALUES(?,?,?,?)').run(username, hashPassword(password), isAdmin ? 1 : 0, new Date().toISOString());
+    res.json({ ok: true });
+  } catch (e) { res.status(400).json({ ok: false, error: /UNIQUE/.test(String(e)) ? 'Cet identifiant existe deja.' : String(e.message || e) }); }
+});
+app.delete('/api/users/:id', requireAuth, requireAdmin, (req, res) => {
+  const id = Number(req.params.id);
+  if (id === req.user.userId) return res.status(400).json({ ok: false, error: 'Impossible de te supprimer toi-meme.' });
+  db.prepare('DELETE FROM users WHERE id=?').run(id);
+  res.json({ ok: true });
+});
+
+// --- Reglages (admin) ---
+app.get('/api/settings', requireAuth, requireAdmin, (_req, res) => {
+  const c = cfg();
+  res.json({
+    ok: true,
+    serverURL: c.serverURL, syncId: c.syncId, budgetName: c.budgetName,
+    aliases: JSON.stringify(c.aliases),
+    hasPassword: !!c.password, hasE2e: !!c.e2ePassword,   // secrets non renvoyes
+  });
+});
+app.post('/api/settings', requireAuth, requireAdmin, (req, res) => {
+  const b = req.body || {};
+  if (b.serverURL !== undefined) setSetting('serverURL', b.serverURL.trim());
+  if (b.syncId !== undefined) setSetting('syncId', b.syncId.trim());
+  if (b.budgetName !== undefined) setSetting('budgetName', b.budgetName.trim());
+  if (b.aliases !== undefined) { try { JSON.parse(b.aliases || '{}'); setSetting('aliases', b.aliases || '{}'); } catch { return res.status(400).json({ ok: false, error: 'Aliases : JSON invalide.' }); } }
+  if (b.password) setSetting('password', b.password);       // mis a jour seulement si fourni
+  if (b.e2ePassword) setSetting('e2ePassword', b.e2ePassword);
+  if (b.clearE2e) setSetting('e2ePassword', '');
+  initedWith = null; // force une reconnexion avec les nouveaux reglages
+  res.json({ ok: true });
+});
+
+// --- Actual : statut / import / regles (auth) ---
+app.get('/api/status', requireAuth, async (_req, res) => {
+  if (busy) return res.status(409).json({ ok: false, error: 'Un traitement est deja en cours.' });
+  busy = true;
   try {
     const { budgets, syncId } = await openBudget();
     let version = null;
     try { const v = await api.getServerVersion(); version = (v && typeof v === 'object') ? (v.version || JSON.stringify(v)) : v; } catch {}
     const accounts = await api.getAccounts();
-    res.json({ ok: true, serverVersion: version, syncId,
-      budgets: budgets.map(b => b.name),
-      accounts: accounts.filter(a => !a.closed).map(a => a.name) });
+    res.json({ ok: true, serverVersion: version, syncId, budgets: budgets.map(b => b.name), accounts: accounts.filter(a => !a.closed).map(a => a.name) });
   } catch (e) { res.status(500).json({ ok: false, error: String(e?.message || e) }); }
+  finally { busy = false; }
 });
 
-app.post('/api/run', upload.array('files'), async (req, res) => {
-  if (busy) return res.status(409).json({ ok: false, error: "Un traitement est deja en cours." });
+app.post('/api/run', requireAuth, upload.array('files'), async (req, res) => {
+  if (busy) return res.status(409).json({ ok: false, error: 'Un traitement est deja en cours.' });
   const dryRun = req.body.dryRun !== 'false';
   const replaceExisting = req.body.replaceExisting === 'true';
   busy = true;
   try {
-    // 1) parse des fichiers
     const parsed = [];
     for (const f of (req.files || [])) {
-      // multer decode le nom en latin1 -> reconvertir en UTF-8 pour les accents
       const fname = Buffer.from(f.originalname, 'latin1').toString('utf8');
       const text = f.buffer.toString('utf8');
       if (!/Nom du compte,/i.test(text)) { parsed.push({ file: fname, skipped: 'pas un releve Sumeria' }); continue; }
@@ -181,12 +321,10 @@ app.post('/api/run', upload.array('files'), async (req, res) => {
       if (!p.transactions.length) { parsed.push({ file: fname, skipped: '0 operation' }); continue; }
       parsed.push({ file: fname, account: p.account, transactions: p.transactions });
     }
-    if (!parsed.some(p => p.transactions)) { busy = false; return res.json({ ok: true, dryRun, results: parsed.map(p => ({ ...p, transactions: undefined })) }); }
+    if (!parsed.some(p => p.transactions)) { busy = false; return res.json({ ok: true, dryRun, results: parsed.map(p => ({ file: p.file, skipped: p.skipped })) }); }
 
-    // 2) connexion + mapping
     await openBudget();
     const accounts = await api.getAccounts();
-
     const results = [];
     for (const p of parsed) {
       if (!p.transactions) { results.push({ file: p.file, skipped: p.skipped }); continue; }
@@ -208,13 +346,12 @@ app.post('/api/run', upload.array('files'), async (req, res) => {
     }
     if (!dryRun) await api.sync();
     res.json({ ok: true, dryRun, results });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: String(e?.message || e) });
-  } finally { busy = false; }
+  } catch (e) { res.status(500).json({ ok: false, error: String(e?.message || e) }); }
+  finally { busy = false; }
 });
 
-app.post('/api/seed-rules', async (_req, res) => {
-  if (busy) return res.status(409).json({ ok: false, error: "Un traitement est deja en cours." });
+app.post('/api/seed-rules', requireAuth, async (_req, res) => {
+  if (busy) return res.status(409).json({ ok: false, error: 'Un traitement est deja en cours.' });
   busy = true;
   try {
     await openBudget();
@@ -223,17 +360,12 @@ app.post('/api/seed-rules', async (_req, res) => {
     const rules = await api.getRules();
     const existing = new Set();
     for (const r of rules) for (const c of (r.conditions || [])) if (c.field === 'notes' && c.op === 'contains') existing.add(String(c.value).toLowerCase());
-
     let created = 0, skipped = 0; const missing = new Set(); const done = [];
     for (const [kw, catName] of SEED_RULES) {
       const catId = catByName.get(norm(catName));
       if (!catId) { missing.add(catName); continue; }
       if (existing.has(kw.toLowerCase().trim())) { skipped++; continue; }
-      await api.createRule({
-        stage: 'pre', conditionsOp: 'and',
-        conditions: [{ field: 'notes', op: 'contains', value: kw }],
-        actions: [{ field: 'category', op: 'set', value: catId }],
-      });
+      await api.createRule({ stage: 'pre', conditionsOp: 'and', conditions: [{ field: 'notes', op: 'contains', value: kw }], actions: [{ field: 'category', op: 'set', value: catId }] });
       created++; done.push(`${kw.trim()} → ${catName}`);
     }
     await api.sync();
@@ -242,4 +374,5 @@ app.post('/api/seed-rules', async (_req, res) => {
   finally { busy = false; }
 });
 
+app.use(express.static(path.join(__dirname, 'public')));
 app.listen(PORT, () => console.log(`Sumeria->Actual web sur le port ${PORT}`));
