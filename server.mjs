@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const PORT = process.env.PORT || 3000;
-const SECURE_COOKIE = /^(1|true|yes)$/i.test(process.env.COOKIE_SECURE || ''); // mettre true derriere HTTPS
+const SECURE_COOKIE = /^(1|true|yes)$/i.test((process.env.COOKIE_SECURE || '').trim().replace(/^["']|["']$/g, '')); // mettre true derriere HTTPS
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
 // Chiffrement au repos des secrets (M3) : cle depuis APP_SECRET (hors volume /data).
