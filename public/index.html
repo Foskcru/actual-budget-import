@@ -84,7 +84,7 @@
     <b>Mon mot de passe</b>
     <div class="row" style="gap:8px;margin-top:8px">
       <input type="password" id="p_cur" placeholder="mot de passe actuel" style="max-width:170px">
-      <input type="password" id="p_new" placeholder="nouveau (min. 6)" style="max-width:170px">
+      <input type="password" id="p_new" placeholder="nouveau (min. 10)" style="max-width:170px">
       <button class="ghost" id="p_btn">Changer</button>
       <span id="p_msg" class="mini"></span>
     </div>
@@ -335,7 +335,7 @@ function render(d){
     } catch(e){ alert('Erreur : '+e.message); b.disabled=false; b.textContent='Créer le compte'; }
   });
 }
-function esc(s){ return String(s).replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+function esc(s){ return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 </script>
 </body>
 </html>

@@ -16,7 +16,31 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const PORT = process.env.PORT || 3000;
+const SECURE_COOKIE = /^(1|true|yes)$/i.test(process.env.COOKIE_SECURE || ''); // mettre true derriere HTTPS
 fs.mkdirSync(DATA_DIR, { recursive: true });
+
+// Chiffrement au repos des secrets (M3) : cle depuis APP_SECRET (hors volume /data).
+// Sans APP_SECRET -> stockage en clair (retro-compatible), avec avertissement.
+const SECRET_KEY = process.env.APP_SECRET ? crypto.createHash('sha256').update(process.env.APP_SECRET).digest() : null;
+if (!SECRET_KEY) console.warn('[secu] APP_SECRET absent : les mots de passe Actual sont stockes en clair. Definis APP_SECRET pour les chiffrer.');
+function encSecret(plain) {
+  if (!SECRET_KEY || plain == null || plain === '') return plain ?? '';
+  const iv = crypto.randomBytes(12);
+  const c = crypto.createCipheriv('aes-256-gcm', SECRET_KEY, iv);
+  const enc = Buffer.concat([c.update(String(plain), 'utf8'), c.final()]);
+  return 'enc:v1:' + Buffer.concat([iv, c.getAuthTag(), enc]).toString('base64');
+}
+function decSecret(stored) {
+  if (!stored || !String(stored).startsWith('enc:v1:')) return stored || ''; // clair (legacy)
+  if (!SECRET_KEY) return ''; // chiffre mais plus de cle -> illisible
+  try {
+    const raw = Buffer.from(String(stored).slice(7), 'base64');
+    const iv = raw.subarray(0, 12), tag = raw.subarray(12, 28), data = raw.subarray(28);
+    const d = crypto.createDecipheriv('aes-256-gcm', SECRET_KEY, iv);
+    d.setAuthTag(tag);
+    return Buffer.concat([d.update(data), d.final()]).toString('utf8');
+  } catch { return ''; }
+}
 
 // ============================ base de donnees ============================
 const db = new DatabaseSync(path.join(DATA_DIR, 'app.db'));
@@ -40,13 +64,16 @@ db.exec(`
 const getSetting = (uid, k, def = '') => { const r = db.prepare('SELECT value FROM user_settings WHERE user_id=? AND key=?').get(uid, k); return r ? r.value : def; };
 const setSetting = (uid, k, v) => db.prepare('INSERT INTO user_settings(user_id,key,value) VALUES(?,?,?) ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value').run(uid, k, String(v ?? ''));
 const userCount = () => db.prepare('SELECT COUNT(*) c FROM users').get().c;
+// Secrets (mot de passe serveur / chiffrement) : chiffres au repos
+const getSecret = (uid, k) => decSecret(getSetting(uid, k));
+const setSecret = (uid, k, v) => setSetting(uid, k, encSecret(v));
 
 function cfg(uid) {
   let aliases = {}; try { aliases = JSON.parse(getSetting(uid, 'aliases', '{}')); } catch {}
   return {
-    serverURL: getSetting(uid, 'serverURL'), password: getSetting(uid, 'password'),
+    serverURL: getSetting(uid, 'serverURL'), password: getSecret(uid, 'password'),
     syncId: getSetting(uid, 'syncId'), budgetName: getSetting(uid, 'budgetName'),
-    e2ePassword: getSetting(uid, 'e2ePassword'), aliases,
+    e2ePassword: getSecret(uid, 'e2ePassword'), aliases,
   };
 }
 // Migration : anciens reglages GLOBAUX (table settings) -> config du 1er admin
@@ -67,10 +94,10 @@ try {
 function seedUserFromEnv(uid) {
   if (!process.env.ACTUAL_SERVER_URL) return;
   setSetting(uid, 'serverURL', process.env.ACTUAL_SERVER_URL);
-  setSetting(uid, 'password', process.env.ACTUAL_PASSWORD || '');
+  setSecret(uid, 'password', process.env.ACTUAL_PASSWORD || '');
   setSetting(uid, 'syncId', process.env.ACTUAL_SYNC_ID || '');
   setSetting(uid, 'budgetName', process.env.ACTUAL_BUDGET_NAME || '');
-  setSetting(uid, 'e2ePassword', process.env.ACTUAL_E2E_PASSWORD || '');
+  setSecret(uid, 'e2ePassword', process.env.ACTUAL_E2E_PASSWORD || '');
   setSetting(uid, 'aliases', process.env.ACTUAL_ALIASES || '{}');
 }
 
@@ -107,6 +134,22 @@ function sessionOf(req) {
 }
 function requireAuth(req, res, next) { const s = sessionOf(req); if (!s) return res.status(401).json({ ok: false, error: 'non authentifie' }); req.user = s; next(); }
 function requireAdmin(req, res, next) { if (!req.user?.isAdmin) return res.status(403).json({ ok: false, error: 'admin requis' }); next(); }
+
+// Hash bidon pour un temps de reponse constant meme si l'identifiant n'existe pas (F1)
+const DUMMY_HASH = hashPassword('timing-dummy-please-ignore');
+function setSessionCookie(res, token) {
+  res.setHeader('Set-Cookie', `sid=${token}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${SESSION_MS / 1000}${SECURE_COOKIE ? '; Secure' : ''}`);
+}
+function clearSessionCookie(res) {
+  res.setHeader('Set-Cookie', `sid=; HttpOnly; Path=/; Max-Age=0${SECURE_COOKIE ? '; Secure' : ''}`);
+}
+// Rate-limiting des connexions (M2) : par identifiant ET par IP
+const loginHits = new Map(); const RL_MAX = 8, RL_WINDOW = 15 * 60 * 1000;
+function clientIp(req) { return (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket?.remoteAddress || 'unknown'; }
+function rlKeys(req, username) { return ['u:' + String(username || '').toLowerCase(), 'ip:' + clientIp(req)]; }
+function rlBlocked(keys) { const now = Date.now(); return keys.some(k => { const e = loginHits.get(k); return e && e.resetAt > now && e.count >= RL_MAX; }); }
+function rlFail(keys) { const now = Date.now(); for (const k of keys) { let e = loginHits.get(k); if (!e || e.resetAt < now) { e = { count: 0, resetAt: now + RL_WINDOW }; loginHits.set(k, e); } e.count++; } }
+function rlReset(keys) { for (const k of keys) loginHits.delete(k); }
 
 // ============================ parseur Sumeria ============================
 const YEAR_RE = /Du\s+\d{1,2}\/\d{1,2}\/(\d{4})/;
@@ -271,8 +314,18 @@ function findAccount(accounts, sumName, aliases) {
 
 // ============================ serveur web ============================
 const app = express();
+// En-tetes de securite (M5)
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'");
+  if (SECURE_COOKIE) res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  next();
+});
 app.use(express.json());
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+// Uploads en memoire : 10 Mo/fichier, 30 fichiers max (M6)
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024, files: 30 } });
 
 // --- Auth : setup / login / logout / me ---
 app.get('/api/needs-setup', (_req, res) => res.json({ needsSetup: userCount() === 0 }));
@@ -280,27 +333,32 @@ app.get('/api/needs-setup', (_req, res) => res.json({ needsSetup: userCount() ==
 app.post('/api/setup', (req, res) => {
   if (userCount() > 0) return res.status(403).json({ ok: false, error: 'Deja configure.' });
   const { username, password } = req.body || {};
-  if (!username || !password || password.length < 6) return res.status(400).json({ ok: false, error: 'Identifiant requis, mot de passe >= 6 caracteres.' });
+  if (!username || !password || password.length < 10) return res.status(400).json({ ok: false, error: 'Identifiant requis, mot de passe >= 10 caracteres.' });
   const info = db.prepare('INSERT INTO users(username,pass_hash,is_admin,created) VALUES(?,?,1,?)').run(username, hashPassword(password), new Date().toISOString());
   const uid = Number(info.lastInsertRowid);
   seedUserFromEnv(uid); // pre-remplit la config du 1er admin depuis les variables d'env
   const token = newSession({ id: uid, username, is_admin: 1 });
-  res.setHeader('Set-Cookie', `sid=${token}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${SESSION_MS / 1000}`);
+  setSessionCookie(res, token);
   res.json({ ok: true, username, isAdmin: true });
 });
 
 app.post('/api/login', (req, res) => {
   const { username, password } = req.body || {};
+  const keys = rlKeys(req, username);
+  if (rlBlocked(keys)) return res.status(429).json({ ok: false, error: 'Trop de tentatives. Reessaie dans quelques minutes.' });
   const u = db.prepare('SELECT * FROM users WHERE username=?').get(String(username || ''));
-  if (!u || !verifyPassword(String(password || ''), u.pass_hash)) return res.status(401).json({ ok: false, error: 'Identifiant ou mot de passe incorrect.' });
+  // scrypt s'execute toujours (vrai hash ou hash bidon) -> pas d'enumeration par timing
+  const ok = u ? verifyPassword(String(password || ''), u.pass_hash) : (verifyPassword(String(password || ''), DUMMY_HASH) && false);
+  if (!u || !ok) { rlFail(keys); return res.status(401).json({ ok: false, error: 'Identifiant ou mot de passe incorrect.' }); }
+  rlReset(keys);
   const token = newSession(u);
-  res.setHeader('Set-Cookie', `sid=${token}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${SESSION_MS / 1000}`);
+  setSessionCookie(res, token);
   res.json({ ok: true, username: u.username, isAdmin: !!u.is_admin });
 });
 
 app.post('/api/logout', (req, res) => {
   const s = sessionOf(req); if (s) sessions.delete(s.token);
-  res.setHeader('Set-Cookie', 'sid=; HttpOnly; Path=/; Max-Age=0');
+  clearSessionCookie(res);
   res.json({ ok: true });
 });
 
@@ -309,7 +367,7 @@ app.get('/api/me', requireAuth, (req, res) => res.json({ ok: true, username: req
 // Changer son propre mot de passe
 app.post('/api/change-password', requireAuth, (req, res) => {
   const { currentPassword, newPassword } = req.body || {};
-  if (!newPassword || newPassword.length < 6) return res.status(400).json({ ok: false, error: 'Nouveau mot de passe : 6 caracteres minimum.' });
+  if (!newPassword || newPassword.length < 10) return res.status(400).json({ ok: false, error: 'Nouveau mot de passe : 10 caracteres minimum.' });
   const u = db.prepare('SELECT * FROM users WHERE id=?').get(req.user.userId);
   if (!u || !verifyPassword(String(currentPassword || ''), u.pass_hash)) return res.status(401).json({ ok: false, error: 'Mot de passe actuel incorrect.' });
   db.prepare('UPDATE users SET pass_hash=? WHERE id=?').run(hashPassword(newPassword), u.id);
@@ -322,7 +380,7 @@ app.get('/api/users', requireAuth, requireAdmin, (_req, res) => {
 });
 app.post('/api/users', requireAuth, requireAdmin, (req, res) => {
   const { username, password, isAdmin } = req.body || {};
-  if (!username || !password || password.length < 6) return res.status(400).json({ ok: false, error: 'Identifiant requis, mot de passe >= 6 caracteres.' });
+  if (!username || !password || password.length < 10) return res.status(400).json({ ok: false, error: 'Identifiant requis, mot de passe >= 10 caracteres.' });
   try {
     db.prepare('INSERT INTO users(username,pass_hash,is_admin,created) VALUES(?,?,?,?)').run(username, hashPassword(password), isAdmin ? 1 : 0, new Date().toISOString());
     res.json({ ok: true });
@@ -332,6 +390,7 @@ app.delete('/api/users/:id', requireAuth, requireAdmin, (req, res) => {
   const id = Number(req.params.id);
   if (id === req.user.userId) return res.status(400).json({ ok: false, error: 'Impossible de te supprimer toi-meme.' });
   db.prepare('DELETE FROM users WHERE id=?').run(id);
+  db.prepare('DELETE FROM user_settings WHERE user_id=?').run(id); // F2 : pas de secrets orphelins
   res.json({ ok: true });
 });
 
@@ -352,8 +411,8 @@ app.post('/api/settings', requireAuth, (req, res) => {
   if (b.syncId !== undefined) setSetting(uid, 'syncId', b.syncId.trim());
   if (b.budgetName !== undefined) setSetting(uid, 'budgetName', b.budgetName.trim());
   if (b.aliases !== undefined) { try { JSON.parse(b.aliases || '{}'); setSetting(uid, 'aliases', b.aliases || '{}'); } catch { return res.status(400).json({ ok: false, error: 'Aliases : JSON invalide.' }); } }
-  if (b.password) setSetting(uid, 'password', b.password);
-  if (b.e2ePassword) setSetting(uid, 'e2ePassword', b.e2ePassword);
+  if (b.password) setSecret(uid, 'password', b.password);
+  if (b.e2ePassword) setSecret(uid, 'e2ePassword', b.e2ePassword);
   if (b.clearE2e) setSetting(uid, 'e2ePassword', '');
   initedWith = null; // force une reconnexion avec les nouveaux reglages
   res.json({ ok: true });
@@ -376,7 +435,7 @@ app.post('/api/create-account', requireAuth, async (req, res) => {
     }
     await api.sync();
     res.json({ ok: true, id });
-  } catch (e) { res.status(500).json({ ok: false, error: String(e?.message || e) }); }
+  } catch (e) { console.error('[erreur]', e?.message || e); res.status(500).json({ ok: false, error: String(e?.message || e) }); }
   finally { busy = false; }
 });
 
@@ -401,7 +460,7 @@ app.get('/api/status', requireAuth, async (req, res) => {
     try { const v = await api.getServerVersion(); version = (v && typeof v === 'object') ? (v.version || JSON.stringify(v)) : v; } catch {}
     const accounts = await api.getAccounts();
     res.json({ ok: true, serverVersion: version, syncId, budgets: budgets.map(b => b.name), accounts: accounts.filter(a => !a.closed).map(a => a.name) });
-  } catch (e) { res.status(500).json({ ok: false, error: String(e?.message || e) }); }
+  } catch (e) { console.error('[erreur]', e?.message || e); res.status(500).json({ ok: false, error: String(e?.message || e) }); }
   finally { busy = false; }
 });
 
@@ -451,7 +510,7 @@ app.post('/api/run', requireAuth, upload.array('files'), async (req, res) => {
     }
     if (!dryRun) await api.sync();
     res.json({ ok: true, dryRun, results, accounts: accounts.filter(a => !a.closed).map(a => a.name) });
-  } catch (e) { res.status(500).json({ ok: false, error: String(e?.message || e) }); }
+  } catch (e) { console.error('[erreur]', e?.message || e); res.status(500).json({ ok: false, error: String(e?.message || e) }); }
   finally { busy = false; }
 });
 
@@ -475,9 +534,20 @@ app.post('/api/seed-rules', requireAuth, async (req, res) => {
     }
     await api.sync();
     res.json({ ok: true, created, skipped, missingCategories: [...missing], done });
-  } catch (e) { res.status(500).json({ ok: false, error: String(e?.message || e) }); }
+  } catch (e) { console.error('[erreur]', e?.message || e); res.status(500).json({ ok: false, error: String(e?.message || e) }); }
   finally { busy = false; }
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
-app.listen(PORT, () => console.log(`Sumeria->Actual web sur le port ${PORT}`));
+
+// Gestion centralisee des erreurs (multer + imprevu) : reponse JSON, detail en log (F3, M6)
+app.use((err, _req, res, next) => {
+  console.error('[erreur]', err?.message || err);
+  if (res.headersSent) return next(err);
+  const msg = err?.code === 'LIMIT_FILE_SIZE' ? 'Fichier trop volumineux (max 10 Mo).'
+    : err?.code === 'LIMIT_FILE_COUNT' ? 'Trop de fichiers (max 30).'
+    : 'Requete invalide.';
+  res.status(400).json({ ok: false, error: msg });
+});
+
+app.listen(PORT, () => console.log(`Import Actual : serveur sur le port ${PORT}`));

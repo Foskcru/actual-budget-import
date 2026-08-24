@@ -9,14 +9,15 @@ services:
     ports:
       - "8092:3000"          # http://IP-DU-NAS:8092  (ou derriere ton NPM)
     environment:
-      # Toutes ces variables sont OPTIONNELLES : elles pre-remplissent les reglages
-      # au 1er demarrage. Ensuite tout se configure dans l'UI (page Parametres).
-      # Au 1er acces, l'app demande de creer le compte administrateur.
-      ACTUAL_SERVER_URL: "https://ADRESSE-DE-TON-ACTUAL"
-      ACTUAL_PASSWORD:   "MOT_DE_PASSE_DU_SERVEUR_ACTUAL"
-      ACTUAL_SYNC_ID:    "ea76be7f-...."                   # Parametres > Avance > ID de synchronisation
+      # --- Securite (recommande) ---
+      APP_SECRET: "UNE_LONGUE_PHRASE_ALEATOIRE"   # chiffre les mots de passe stockes (M3). A garder secret, hors du volume /data.
+      COOKIE_SECURE: "true"                        # cookie Secure : mettre true si acces en HTTPS (via NPM)
+      # --- Config Actual : OPTIONNELLE (pre-remplit le 1er admin ; ensuite tout se fait dans l'UI) ---
+      # ACTUAL_SERVER_URL: "https://ADRESSE-DE-TON-ACTUAL"
+      # ACTUAL_PASSWORD:   "MOT_DE_PASSE_DU_SERVEUR_ACTUAL"
+      # ACTUAL_SYNC_ID:    "ea76be7f-...."
       # ACTUAL_BUDGET_NAME: "Budget EC"
-      # ACTUAL_E2E_PASSWORD: "mot_de_passe_de_chiffrement" # si budget chiffre
+      # ACTUAL_E2E_PASSWORD: "mot_de_passe_de_chiffrement"
       # --- Optionnel : correspondances de noms de comptes ---
       # ACTUAL_ALIASES: '{"Anniversaire":"SUM Anniversaires"}'
     volumes:

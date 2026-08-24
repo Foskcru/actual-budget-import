@@ -74,6 +74,13 @@ Elles servent seulement de **valeurs par défaut** au tout premier démarrage (p
 | `ACTUAL_ALIASES` | JSON de correspondances, ex. `{"Anniversaire":"SUM Anniversaires"}` |
 | `PORT` | Port interne (défaut `3000`) |
 | `DATA_DIR` | Dossier de données : DB + cache budget (défaut `/data`) |
+| `APP_SECRET` | **Recommandé** : clé qui chiffre les mots de passe Actual stockés en base (AES-256-GCM). À garder secrète, hors du volume `/data`. Sans elle, stockage en clair. |
+| `COOKIE_SECURE` | `true` si l'app est servie en **HTTPS** (cookie `Secure` + HSTS). Laisser `false`/absent en HTTP local. |
+
+### Résumé sécurité
+- Auth par session (scrypt + cookie `HttpOnly`/`SameSite=Lax`), rate-limiting des connexions, en-têtes CSP/anti-clickjacking.
+- Mots de passe Actual **chiffrés au repos** si `APP_SECRET` est défini.
+- Voir `../RAPPORT-SECURITE.md` pour l'analyse complète.
 
 > ⚠️ La version de l'API (`@actual-app/api`) doit correspondre à celle de ton serveur Actual.
 > Ce dépôt cible **26.8.1** — adapte `package.json` + rebuild si tu mets Actual à jour.
