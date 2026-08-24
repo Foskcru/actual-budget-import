@@ -64,9 +64,20 @@
       <div><label class="mini">Mot de passe serveur</label><input type="password" id="s_pw" placeholder="(inchangé)"></div>
       <div><label class="mini">Mot de passe de chiffrement</label><input type="password" id="s_e2e" placeholder="(inchangé)"></div>
       <div><label class="mini">Nom de budget (si pas d'ID)</label><input type="text" id="s_budget" placeholder="Budget EC"></div>
-      <div><label class="mini">Aliases (JSON)</label><input type="text" id="s_alias" placeholder='{"Anniversaire":"SUM Anniversaires"}'></div>
     </div>
     <div class="row" style="margin-top:12px"><button id="s_save">Enregistrer</button><span id="s_msg" class="mini"></span></div>
+
+    <hr style="border:0;border-top:1px solid var(--line);margin:18px 0">
+    <b>Correspondances de comptes</b>
+    <div class="mini" style="margin:2px 0 8px">Relie un compte du fichier (nom Sumeria, ou n° de compte BNP de l'OFX) à un compte Actual. Enregistré automatiquement.</div>
+    <datalist id="acctList"></datalist>
+    <div id="aliasRows"></div>
+    <div class="row" style="gap:8px;margin-top:8px">
+      <input type="text" id="a_key" placeholder="ex. 00000310032" style="max-width:180px">
+      <span class="mini">→</span>
+      <input type="text" id="a_val" list="acctList" placeholder="compte Actual" style="max-width:180px">
+      <button class="ghost" id="a_add">Ajouter</button>
+    </div>
 
     <hr style="border:0;border-top:1px solid var(--line);margin:18px 0">
     <b>Mon mot de passe</b>
@@ -164,20 +175,43 @@ $('btnSettings').onclick = () => {
   const c = $('settingsCard'); const show = c.style.display==='none';
   c.style.display = show ? '' : 'none'; if(show) loadSettings();
 };
+let ALIASES = {}, ACCOUNTS = [];
 async function loadSettings(){
   const d = await (await fetch('/api/settings')).json(); if(!d.ok) return;
-  $('s_url').value=d.serverURL||''; $('s_sync').value=d.syncId||''; $('s_budget').value=d.budgetName||''; $('s_alias').value=d.aliases||'{}';
+  $('s_url').value=d.serverURL||''; $('s_sync').value=d.syncId||''; $('s_budget').value=d.budgetName||'';
   $('s_pw').placeholder = d.hasPassword?'(inchangé)':'(vide)'; $('s_e2e').placeholder = d.hasE2e?'(inchangé)':'(vide)';
+  try { ALIASES = JSON.parse(d.aliases||'{}'); } catch { ALIASES={}; }
+  renderAliases(); fetchAccounts();
   if(IS_ADMIN) loadUsers();
 }
 $('s_save').onclick = async () => {
   $('s_msg').textContent='…';
-  const body = { serverURL:$('s_url').value, syncId:$('s_sync').value, budgetName:$('s_budget').value, aliases:$('s_alias').value };
+  const body = { serverURL:$('s_url').value, syncId:$('s_sync').value, budgetName:$('s_budget').value };
   if($('s_pw').value) body.password=$('s_pw').value;
   if($('s_e2e').value) body.e2ePassword=$('s_e2e').value;
   const d = await (await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
   $('s_msg').textContent = d.ok ? 'Enregistré ✓' : ('Erreur : '+d.error);
   $('s_pw').value=''; $('s_e2e').value='';
+  fetchAccounts(); // recharge la liste des comptes une fois la connexion configurée
+};
+// --- Correspondances de comptes (sans JSON) ---
+function renderAliases(){
+  const rows = Object.entries(ALIASES);
+  $('aliasRows').innerHTML = rows.length
+    ? rows.map(([k,v])=>`<div class="row" style="gap:8px;margin:4px 0"><span class="mini" style="min-width:160px">${esc(k)}</span><span class="mini">→</span><span class="mini" style="flex:1">${esc(v)}</span><a href="#" class="del" data-k="${esc(k)}">✕</a></div>`).join('')
+    : '<div class="mini">Aucune correspondance.</div>';
+  document.querySelectorAll('#aliasRows .del').forEach(a=>a.onclick=e=>{e.preventDefault(); delete ALIASES[a.dataset.k]; renderAliases(); saveAliases();});
+}
+async function fetchAccounts(){
+  try { const s = await (await fetch('/api/status')).json(); if(s.ok){ ACCOUNTS=s.accounts||[]; $('acctList').innerHTML=ACCOUNTS.map(a=>`<option value="${esc(a)}"></option>`).join(''); } } catch {}
+}
+async function saveAliases(){
+  await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({aliases:JSON.stringify(ALIASES)})});
+}
+$('a_add').onclick = () => {
+  const k=$('a_key').value.trim(), v=$('a_val').value.trim();
+  if(!k||!v){ return; }
+  ALIASES[k]=v; $('a_key').value=''; $('a_val').value=''; renderAliases(); saveAliases();
 };
 async function loadUsers(){
   const d = await (await fetch('/api/users')).json(); if(!d.ok) return;
