@@ -39,6 +39,7 @@
   @media(max-width:640px){.grid2{grid-template-columns:1fr}}
   input[type=text],input[type=password],.grid2 input{width:100%;padding:9px 11px;border-radius:8px;border:1px solid var(--line);background:var(--soft);color:var(--ink);font-size:14px}
   a.del{color:var(--err);text-decoration:none;margin-left:6px}
+  select{padding:9px 11px;border-radius:8px;border:1px solid var(--line);background:var(--soft);color:var(--ink);font-size:14px}
 </style>
 </head>
 <body>
@@ -283,13 +284,19 @@ function render(d){
       const bal = (x.balance!=null) ? (x.balance/100).toFixed(2)+' €' : '?';
       const suggested = x.last4 ? ('BNP …'+x.last4) : '';
       const idx = i++;
+      const opts = (d.accounts||[]).map(a=>`<option>${esc(a)}</option>`).join('');
       const create = `
         <div class="tag-no">Compte non connecté</div>
         <div class="mini">n° …${esc(x.last4||'?')} · ACCTID ${esc(x.account)} · solde ${esc(bal)}</div>
         <div class="row" style="gap:6px;margin-top:6px">
-          <input type="text" id="na_${idx}" list="acctList" placeholder="nom du compte" value="${esc(suggested)}" style="max-width:160px">
+          <select id="lk_${idx}" style="max-width:190px">${opts}</select>
+          <button class="ghost linkacc" data-i="${idx}" data-acctid="${esc(x.account)}">Lier à ce compte</button>
+        </div>
+        <div class="row" style="gap:6px;margin-top:4px">
+          <span class="mini">ou créer :</span>
+          <input type="text" id="na_${idx}" placeholder="nom" value="${esc(suggested)}" style="max-width:130px">
           <label class="chk"><input type="checkbox" id="no_${idx}"> hors budget</label>
-          <button class="ghost createacc" data-i="${idx}" data-acctid="${esc(x.account)}" data-bal="${x.balance!=null?x.balance:''}">Créer le compte</button>
+          <button class="ghost createacc" data-i="${idx}" data-acctid="${esc(x.account)}" data-bal="${x.balance!=null?x.balance:''}">Créer</button>
         </div>`;
       h+=`<tr><td>${esc(x.file)}</td><td>${esc(x.account)}</td><td>${x.count}</td><td>${create}</td></tr>`;
       continue;
@@ -302,6 +309,16 @@ function render(d){
     h += `<tr><td>${esc(x.file)}</td><td>${esc(x.account)}</td><td>${x.count}</td><td>${result}</td></tr>`;
   }
   $('resTable').innerHTML = h;
+  document.querySelectorAll('.linkacc').forEach(b=>b.onclick=async()=>{
+    const idx=b.dataset.i, name=$('lk_'+idx).value;
+    if(!name){ alert('Choisis un compte.'); return; }
+    b.disabled=true; b.textContent='…';
+    try {
+      const r = await (await fetch('/api/map-account',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({acctid:b.dataset.acctid, name})})).json();
+      if(!r.ok) throw new Error(r.error);
+      b.textContent='Lié ✓ — relance l\'import';
+    } catch(e){ alert('Erreur : '+e.message); b.disabled=false; b.textContent='Lier à ce compte'; }
+  });
   document.querySelectorAll('.createacc').forEach(b=>b.onclick=async()=>{
     const idx=b.dataset.i, name=$('na_'+idx).value.trim(), off=$('no_'+idx).checked;
     if(!name){ alert('Donne un nom au compte.'); return; }

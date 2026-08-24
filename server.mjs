@@ -380,6 +380,17 @@ app.post('/api/create-account', requireAuth, async (req, res) => {
   finally { busy = false; }
 });
 
+// --- Relier un compte de fichier (ACCTID) a un compte Actual existant ---
+app.post('/api/map-account', requireAuth, (req, res) => {
+  const { acctid, name } = req.body || {};
+  if (!acctid || !name) return res.status(400).json({ ok: false, error: 'acctid et nom requis.' });
+  const uid = req.user.userId;
+  let aliases = {}; try { aliases = JSON.parse(getSetting(uid, 'aliases', '{}')); } catch {}
+  aliases[String(acctid)] = String(name);
+  setSetting(uid, 'aliases', JSON.stringify(aliases));
+  res.json({ ok: true });
+});
+
 // --- Actual : statut / import / regles (auth) ---
 app.get('/api/status', requireAuth, async (req, res) => {
   if (busy) return res.status(409).json({ ok: false, error: 'Un traitement est deja en cours.' });
@@ -439,7 +450,7 @@ app.post('/api/run', requireAuth, upload.array('files'), async (req, res) => {
       results.push(base);
     }
     if (!dryRun) await api.sync();
-    res.json({ ok: true, dryRun, results });
+    res.json({ ok: true, dryRun, results, accounts: accounts.filter(a => !a.closed).map(a => a.name) });
   } catch (e) { res.status(500).json({ ok: false, error: String(e?.message || e) }); }
   finally { busy = false; }
 });
