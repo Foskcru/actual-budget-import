@@ -12,6 +12,9 @@ services:
       # --- Securite (recommande) ---
       APP_SECRET: "UNE_LONGUE_PHRASE_ALEATOIRE"   # chiffre les mots de passe stockes (M3). A garder secret, hors du volume /data.
       COOKIE_SECURE: "true"                        # cookie Secure : mettre true si acces en HTTPS (via NPM)
+      # --- Alertes ntfy quand un compte se bloque (8 echecs) : optionnel ---
+      # NTFY_URL: "https://ntfy.mon-nas/actual-alertes"   # URL complete du topic ntfy
+      # NTFY_TOKEN: "tk_xxx"                               # jeton si le topic est protege (sinon laisser vide)
       # --- Config Actual : OPTIONNELLE (pre-remplit le 1er admin ; ensuite tout se fait dans l'UI) ---
       # ACTUAL_SERVER_URL: "https://ADRESSE-DE-TON-ACTUAL"
       # ACTUAL_PASSWORD:   "MOT_DE_PASSE_DU_SERVEUR_ACTUAL"

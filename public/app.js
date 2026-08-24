@@ -37,7 +37,7 @@ async function loadSettings(){
   $('s_pw').placeholder = d.hasPassword?'(inchangé)':'(vide)'; $('s_e2e').placeholder = d.hasE2e?'(inchangé)':'(vide)';
   try { ALIASES = JSON.parse(d.aliases||'{}'); } catch { ALIASES={}; }
   renderAliases(); fetchAccounts();
-  if(IS_ADMIN) loadUsers();
+  if(IS_ADMIN){ loadUsers(); loadLocks(); }
 }
 $('s_save').onclick = async () => {
   $('s_msg').textContent='…';
@@ -74,9 +74,25 @@ $('a_add').onclick = () => {
 };
 async function loadUsers(){
   const d = await (await fetch('/api/users')).json(); if(!d.ok) return;
-  $('userList').innerHTML = d.users.map(u=>`${esc(u.username)}${u.is_admin?' · admin':''} <a href="#" data-id="${u.id}" data-name="${esc(u.username)}" class="del">✕</a>`).join('<br>');
-  document.querySelectorAll('.del').forEach(a=>a.onclick=async e=>{e.preventDefault(); if(confirm('Supprimer l\'utilisateur « '+a.dataset.name+' » ?')){ await fetch('/api/users/'+a.dataset.id,{method:'DELETE'}); loadUsers(); }});
+  $('userList').innerHTML = d.users.map(u=>{
+    const state = u.disabled ? ' <span class="tag-no">désactivé</span>' : '';
+    const tgl = `<a href="#" class="tgl" data-id="${u.id}" data-name="${esc(u.username)}" data-act="${u.disabled?'0':'1'}">${u.disabled?'réactiver':'désactiver'}</a>`;
+    return `<div style="margin:3px 0">${esc(u.username)}${u.is_admin?' · admin':''}${state} &nbsp; ${tgl} &nbsp; <a href="#" class="del" data-id="${u.id}" data-name="${esc(u.username)}">supprimer</a></div>`;
+  }).join('');
+  document.querySelectorAll('#userList .del').forEach(a=>a.onclick=async e=>{e.preventDefault(); if(confirm('Supprimer l\'utilisateur « '+a.dataset.name+' » ?')){ await fetch('/api/users/'+a.dataset.id,{method:'DELETE'}); loadUsers(); }});
+  document.querySelectorAll('#userList .tgl').forEach(a=>a.onclick=async e=>{e.preventDefault(); const act=a.dataset.act==='1'; if(confirm((act?'Désactiver':'Réactiver')+' le compte « '+a.dataset.name+' » ?')){ await fetch('/api/users/'+a.dataset.id+'/disabled',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({disabled:act})}); loadUsers(); }});
 }
+async function loadLocks(){
+  const d = await (await fetch('/api/locks')).json(); if(!d.ok) return;
+  if(!d.locks.length){ $('lockList').innerHTML='<span class="mini">Aucune connexion bloquée.</span>'; return; }
+  $('lockList').innerHTML = d.locks.map(l=>{
+    const who = l.key && l.key.indexOf('u:')===0 ? ('compte « '+esc(l.username||l.key.slice(2))+' »') : ('IP '+esc(l.ip||(l.key||'').slice(3)));
+    const until = new Date(l.reset_at).toLocaleString('fr-FR');
+    return `<div style="margin:3px 0">🔒 ${who} · ${l.count} échecs · jusqu'au ${esc(until)} &nbsp; <a href="#" class="unlk" data-key="${esc(l.key)}">débloquer</a></div>`;
+  }).join('');
+  document.querySelectorAll('#lockList .unlk').forEach(a=>a.onclick=async e=>{e.preventDefault(); await fetch('/api/unlock',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key:a.dataset.key})}); loadLocks(); });
+}
+$('unlockAll').onclick = async () => { if(confirm('Débloquer TOUTES les connexions bloquées ?')){ await fetch('/api/unlock',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})}); loadLocks(); } };
 $('p_btn').onclick = async () => {
   $('p_msg').textContent = '…';
   const d = await (await fetch('/api/change-password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({currentPassword:$('p_cur').value,newPassword:$('p_new').value})})).json();

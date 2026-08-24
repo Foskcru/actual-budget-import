@@ -17,6 +17,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const PORT = process.env.PORT || 3000;
 const SECURE_COOKIE = /^(1|true|yes)$/i.test((process.env.COOKIE_SECURE || '').trim().replace(/^["']|["']$/g, '')); // mettre true derriere HTTPS
+const LOCK_MAX = 8;                       // echecs avant blocage
+const LOCK_MS = 24 * 3600 * 1000;         // duree du blocage : 1 jour
+const NTFY_URL = (process.env.NTFY_URL || '').trim();   // ex https://ntfy.mon-nas/actual-alertes
+const NTFY_TOKEN = (process.env.NTFY_TOKEN || '').trim();
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
 // Chiffrement au repos des secrets (M3) : cle depuis APP_SECRET (hors volume /data).
@@ -59,7 +63,15 @@ db.exec(`
     value TEXT,
     PRIMARY KEY (user_id, key)
   );
+  CREATE TABLE IF NOT EXISTS login_locks (
+    key TEXT PRIMARY KEY,
+    count INTEGER NOT NULL DEFAULT 0,
+    reset_at INTEGER NOT NULL DEFAULT 0,
+    username TEXT, ip TEXT, updated INTEGER
+  );
 `);
+// Colonne "disabled" (compte desactive par un admin) : ajout si absente
+try { db.exec('ALTER TABLE users ADD COLUMN disabled INTEGER DEFAULT 0'); } catch {}
 // Reglages PAR UTILISATEUR : chacun a sa propre config Actual (budget isole).
 const getSetting = (uid, k, def = '') => { const r = db.prepare('SELECT value FROM user_settings WHERE user_id=? AND key=?').get(uid, k); return r ? r.value : def; };
 const setSetting = (uid, k, v) => db.prepare('INSERT INTO user_settings(user_id,key,value) VALUES(?,?,?) ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value').run(uid, k, String(v ?? ''));
@@ -116,8 +128,12 @@ function verifyPassword(pw, stored) {
 }
 const sessions = new Map(); // token -> { userId, username, isAdmin, exp }
 const SESSION_MS = 7 * 24 * 3600 * 1000;
-// Purge periodique des sessions expirees (F6)
-setInterval(() => { const now = Date.now(); for (const [t, s] of sessions) if (s.exp < now) sessions.delete(t); }, 3600 * 1000).unref?.();
+// Purge periodique des sessions expirees (F6) + verrous de connexion expires
+setInterval(() => {
+  const now = Date.now();
+  for (const [t, s] of sessions) if (s.exp < now) sessions.delete(t);
+  try { db.prepare('DELETE FROM login_locks WHERE reset_at < ?').run(now); } catch {}
+}, 3600 * 1000).unref?.();
 function newSession(u) {
   const t = crypto.randomBytes(24).toString('hex');
   sessions.set(t, { userId: u.id, username: u.username, isAdmin: !!u.is_admin, exp: Date.now() + SESSION_MS });
@@ -145,13 +161,37 @@ function setSessionCookie(res, token) {
 function clearSessionCookie(res) {
   res.setHeader('Set-Cookie', `sid=; HttpOnly; Path=/; Max-Age=0${SECURE_COOKIE ? '; Secure' : ''}`);
 }
-// Rate-limiting des connexions (M2) : par identifiant ET par IP
-const loginHits = new Map(); const RL_MAX = 8, RL_WINDOW = 15 * 60 * 1000;
+// Rate-limiting PERSISTANT (M2) : par identifiant ET par IP, survit au redemarrage, blocage 24 h
 function clientIp(req) { return (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket?.remoteAddress || 'unknown'; }
 function rlKeys(req, username) { return ['u:' + String(username || '').toLowerCase(), 'ip:' + clientIp(req)]; }
-function rlBlocked(keys) { const now = Date.now(); return keys.some(k => { const e = loginHits.get(k); return e && e.resetAt > now && e.count >= RL_MAX; }); }
-function rlFail(keys) { const now = Date.now(); for (const k of keys) { let e = loginHits.get(k); if (!e || e.resetAt < now) { e = { count: 0, resetAt: now + RL_WINDOW }; loginHits.set(k, e); } e.count++; } }
-function rlReset(keys) { for (const k of keys) loginHits.delete(k); }
+function rlBlocked(keys) {
+  const now = Date.now();
+  return keys.some(k => { const e = db.prepare('SELECT count,reset_at FROM login_locks WHERE key=?').get(k); return e && e.reset_at > now && e.count >= LOCK_MAX; });
+}
+// incremente les compteurs ; retourne true si le seuil vient d'etre atteint (transition -> bloque)
+function rlFail(keys, username, ip) {
+  const now = Date.now(); let became = false;
+  for (const k of keys) {
+    const e = db.prepare('SELECT count,reset_at FROM login_locks WHERE key=?').get(k);
+    const count = (!e || e.reset_at < now) ? 1 : e.count + 1;
+    db.prepare('INSERT INTO login_locks(key,count,reset_at,username,ip,updated) VALUES(?,?,?,?,?,?) ON CONFLICT(key) DO UPDATE SET count=excluded.count,reset_at=excluded.reset_at,username=excluded.username,ip=excluded.ip,updated=excluded.updated')
+      .run(k, count, now + LOCK_MS, username, ip, now);
+    if (count === LOCK_MAX) became = true;
+  }
+  return became;
+}
+function rlReset(keys) { for (const k of keys) db.prepare('DELETE FROM login_locks WHERE key=?').run(k); }
+// Alerte ntfy quand un compte se bloque (compte + IP)
+async function notifyLock(username, ip) {
+  if (!NTFY_URL) return;
+  try {
+    await fetch(NTFY_URL, {
+      method: 'POST',
+      headers: { 'Title': 'Actual Import : compte bloque', 'Priority': 'high', 'Tags': 'warning,lock', ...(NTFY_TOKEN ? { 'Authorization': 'Bearer ' + NTFY_TOKEN } : {}) },
+      body: `Compte "${username || '?'}" bloque apres ${LOCK_MAX} echecs de connexion.\nIP : ${ip || '?'}\nBlocage 24 h (ou deblocage par un admin).`,
+    });
+  } catch (e) { console.error('[ntfy]', e?.message || e); }
+}
 
 // ============================ parseur Sumeria ============================
 const YEAR_RE = /Du\s+\d{1,2}\/\d{1,2}\/(\d{4})/;
@@ -346,12 +386,18 @@ app.post('/api/setup', (req, res) => {
 
 app.post('/api/login', (req, res) => {
   const { username, password } = req.body || {};
+  const ip = clientIp(req);
   const keys = rlKeys(req, username);
-  if (rlBlocked(keys)) return res.status(429).json({ ok: false, error: 'Trop de tentatives. Reessaie dans quelques minutes.' });
+  if (rlBlocked(keys)) return res.status(429).json({ ok: false, error: 'Compte temporairement bloque (trop de tentatives). Contacte un administrateur.' });
   const u = db.prepare('SELECT * FROM users WHERE username=?').get(String(username || ''));
+  if (u && u.disabled) return res.status(403).json({ ok: false, error: 'Compte desactive. Contacte un administrateur.' });
   // scrypt s'execute toujours (vrai hash ou hash bidon) -> pas d'enumeration par timing
   const ok = u ? verifyPassword(String(password || ''), u.pass_hash) : (verifyPassword(String(password || ''), DUMMY_HASH) && false);
-  if (!u || !ok) { rlFail(keys); return res.status(401).json({ ok: false, error: 'Identifiant ou mot de passe incorrect.' }); }
+  if (!u || !ok) {
+    const became = rlFail(keys, String(username || ''), ip);
+    if (became) notifyLock(String(username || ''), ip); // alerte ntfy (fire-and-forget)
+    return res.status(401).json({ ok: false, error: 'Identifiant ou mot de passe incorrect.' });
+  }
   rlReset(keys);
   const token = newSession(u);
   setSessionCookie(res, token);
@@ -378,7 +424,28 @@ app.post('/api/change-password', requireAuth, (req, res) => {
 
 // --- Gestion des utilisateurs (admin) ---
 app.get('/api/users', requireAuth, requireAdmin, (_req, res) => {
-  res.json({ ok: true, users: db.prepare('SELECT id,username,is_admin,created FROM users ORDER BY id').all() });
+  res.json({ ok: true, users: db.prepare('SELECT id,username,is_admin,disabled,created FROM users ORDER BY id').all() });
+});
+// Activer / desactiver un compte indefiniment (admin)
+app.post('/api/users/:id/disabled', requireAuth, requireAdmin, (req, res) => {
+  const id = Number(req.params.id);
+  const disabled = req.body?.disabled ? 1 : 0;
+  if (id === req.user.userId && disabled) return res.status(400).json({ ok: false, error: 'Impossible de te desactiver toi-meme.' });
+  db.prepare('UPDATE users SET disabled=? WHERE id=?').run(disabled, id);
+  if (disabled) for (const [t, s] of sessions) if (s.userId === id) sessions.delete(t); // coupe ses sessions
+  res.json({ ok: true });
+});
+// Connexions bloquees : lister / debloquer (admin)
+app.get('/api/locks', requireAuth, requireAdmin, (_req, res) => {
+  const now = Date.now();
+  const locks = db.prepare('SELECT key,count,reset_at,username,ip FROM login_locks WHERE reset_at>? AND count>=? ORDER BY reset_at DESC').all(now, LOCK_MAX);
+  res.json({ ok: true, locks });
+});
+app.post('/api/unlock', requireAuth, requireAdmin, (req, res) => {
+  const key = req.body?.key;
+  if (key) db.prepare('DELETE FROM login_locks WHERE key=?').run(String(key));
+  else db.exec('DELETE FROM login_locks'); // tout debloquer
+  res.json({ ok: true });
 });
 app.post('/api/users', requireAuth, requireAdmin, (req, res) => {
   const { username, password, isAdmin } = req.body || {};

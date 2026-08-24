@@ -76,6 +76,8 @@ Elles servent seulement de **valeurs par défaut** au tout premier démarrage (p
 | `DATA_DIR` | Dossier de données : DB + cache budget (défaut `/data`) |
 | `APP_SECRET` | **Recommandé** : clé qui chiffre les mots de passe Actual stockés en base (AES-256-GCM). À garder secrète, hors du volume `/data`. Sans elle, stockage en clair. |
 | `COOKIE_SECURE` | `true` si l'app est servie en **HTTPS** (cookie `Secure` + HSTS). Laisser `false`/absent en HTTP local. |
+| `NTFY_URL` | Optionnel : URL d'un topic **ntfy** pour être alerté quand un compte se bloque (8 échecs). |
+| `NTFY_TOKEN` | Optionnel : jeton d'authentification ntfy (si le topic est protégé). |
 
 ### Résumé sécurité
 - Auth par session (scrypt + cookie `HttpOnly`/`SameSite=Lax`), rate-limiting des connexions, en-têtes CSP/anti-clickjacking.
