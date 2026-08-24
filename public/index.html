@@ -46,7 +46,7 @@
   <div class="topbar">
     <div>
       <h1>Import données → Actual Budget</h1>
-      <p class="sub" style="margin-bottom:0">Dépose tes relevés Sumeria (CSV bruts). Chaque fichier est envoyé dans le bon compte, sans doublon.</p>
+      <p class="sub" style="margin-bottom:0">Dépose tes relevés Sumeria (CSV) ou BNP (OFX). Chaque fichier part dans le bon compte, sans doublon.</p>
     </div>
     <div class="userbar">
       <span id="who" class="mini"></span>
@@ -98,8 +98,8 @@
   </div>
 
   <div class="card">
-    <div id="drop">📄 Glisse tes fichiers CSV ici, ou clique pour choisir</div>
-    <input type="file" id="file" accept=".csv" multiple hidden>
+    <div id="drop">📄 Glisse tes fichiers ici (CSV Sumeria ou OFX BNP), ou clique pour choisir</div>
+    <input type="file" id="file" accept=".csv,.ofx" multiple hidden>
     <div class="files" id="fileList"></div>
   </div>
 
@@ -140,7 +140,7 @@ drop.onclick = () => input.click();
 input.onchange = () => { files = [...input.files]; renderFiles(); };
 ['dragover','dragenter'].forEach(e=>drop.addEventListener(e,ev=>{ev.preventDefault();drop.classList.add('hover')}));
 ['dragleave','drop'].forEach(e=>drop.addEventListener(e,ev=>{ev.preventDefault();drop.classList.remove('hover')}));
-drop.addEventListener('drop', ev => { files = [...ev.dataTransfer.files].filter(f=>f.name.toLowerCase().endsWith('.csv')); renderFiles(); });
+drop.addEventListener('drop', ev => { files = [...ev.dataTransfer.files].filter(f=>/\.(csv|ofx)$/i.test(f.name)); renderFiles(); });
 
 function renderFiles(){
   $('fileList').textContent = files.length ? `${files.length} fichier(s) : ` + files.map(f=>f.name).join(', ') : '';

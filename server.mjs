@@ -186,6 +186,38 @@ function parseSumeria(text) {
   return { account, transactions };
 }
 
+// ---- OFX (BNP et autres banques) ----
+const decodeEntities = (s) => String(s || '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&apos;/g, "'");
+function extractPayeeBNP(name, memo) {
+  const n = (name || '').trim();
+  if (/FACTURE CARTE/i.test(n)) {
+    const m = memo.match(/DU\s+\d{6}\s+(.+?)\s+CARTE\b/i);
+    if (m) return (m[1].split(/\s{2,}/)[0].replace(/\s+/g, ' ').trim()) || n;
+    return n;
+  }
+  return n || null;
+}
+function parseOFX(text) {
+  const account = (text.match(/<ACCTID>([^<\r\n]+)/i) || [])[1]?.trim() || null;
+  const blocks = text.split(/<STMTTRN>/i).slice(1);
+  const transactions = [];
+  for (const b of blocks) {
+    const g = (t) => { const m = b.match(new RegExp('<' + t + '>([^<\\r\\n]*)', 'i')); return m ? m[1].trim() : ''; };
+    const dt = g('DTPOSTED');
+    const iso = dt.length >= 8 ? `${dt.slice(0, 4)}-${dt.slice(4, 6)}-${dt.slice(6, 8)}` : null;
+    if (!iso) continue;
+    const amt = parseFloat(g('TRNAMT').replace(',', '.'));
+    if (isNaN(amt)) continue;
+    const name = decodeEntities(g('NAME')), memo = decodeEntities(g('MEMO'));
+    const payee = extractPayeeBNP(name, memo);
+    const notes = [name, memo].filter(Boolean).join(' — ') || null;
+    const tx = { date: iso, amount: Math.round(amt * 100), notes, imported_id: g('FITID') || undefined, cleared: true };
+    if (payee) tx.payee_name = payee;
+    transactions.push(tx);
+  }
+  return { account, transactions };
+}
+
 // Regles de demarrage : [mot-cle dans les Notes, nom de categorie]
 const SEED_RULES = [
   ['CARREFOUR', 'Alimentation'], ['MONOPRIX', 'Alimentation'], ['FRANPRIX', 'Alimentation'],
@@ -349,9 +381,11 @@ app.post('/api/run', requireAuth, upload.array('files'), async (req, res) => {
     for (const f of (req.files || [])) {
       const fname = Buffer.from(f.originalname, 'latin1').toString('utf8');
       const text = f.buffer.toString('utf8');
-      if (!/Nom du compte,/i.test(text)) { parsed.push({ file: fname, skipped: 'pas un releve Sumeria' }); continue; }
-      const p = parseSumeria(text);
-      if (!p.account) { parsed.push({ file: fname, skipped: 'compte introuvable (ligne 2)' }); continue; }
+      let p, kind;
+      if (/<OFX>|<STMTTRN>/i.test(text)) { p = parseOFX(text); kind = 'OFX'; }
+      else if (/Nom du compte,/i.test(text)) { p = parseSumeria(text); kind = 'Sumeria'; }
+      else { parsed.push({ file: fname, skipped: 'format non reconnu (ni CSV Sumeria ni OFX)' }); continue; }
+      if (!p.account) { parsed.push({ file: fname, skipped: kind === 'OFX' ? 'compte OFX introuvable (ACCTID)' : 'compte introuvable (ligne 2)' }); continue; }
       if (!p.transactions.length) { parsed.push({ file: fname, skipped: '0 operation' }); continue; }
       parsed.push({ file: fname, account: p.account, transactions: p.transactions });
     }
