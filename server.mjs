@@ -409,10 +409,11 @@ app.post('/api/run', requireAuth, upload.array('files'), async (req, res) => {
       else if (/Nom du compte,/i.test(text)) { p = parseSumeria(text); kind = 'Sumeria'; }
       else { parsed.push({ file: fname, skipped: 'format non reconnu (ni CSV Sumeria ni OFX)' }); continue; }
       if (!p.account) { parsed.push({ file: fname, skipped: kind === 'OFX' ? 'compte OFX introuvable (ACCTID)' : 'compte introuvable (ligne 2)' }); continue; }
-      if (!p.transactions.length) { parsed.push({ file: fname, skipped: '0 operation' }); continue; }
+      // Sumeria a 0 op = ignore ; OFX a 0 op = on garde pour permettre la creation/mapping du compte
+      if (!p.transactions.length && kind !== 'OFX') { parsed.push({ file: fname, skipped: '0 operation' }); continue; }
       parsed.push({ file: fname, account: p.account, balance: p.balance ?? null, transactions: p.transactions });
     }
-    if (!parsed.some(p => p.transactions)) { busy = false; return res.json({ ok: true, dryRun, results: parsed.map(p => ({ file: p.file, skipped: p.skipped })) }); }
+    if (!parsed.some(p => p.account)) { busy = false; return res.json({ ok: true, dryRun, results: parsed.map(p => ({ file: p.file, skipped: p.skipped })) }); }
 
     await openBudget(req.user.userId);
     const accounts = await api.getAccounts();
@@ -422,6 +423,7 @@ app.post('/api/run', requireAuth, upload.array('files'), async (req, res) => {
       if (!p.transactions) { results.push({ file: p.file, skipped: p.skipped }); continue; }
       const acc = findAccount(accounts, p.account, aliases);
       if (!acc) { results.push({ file: p.file, account: p.account, count: p.transactions.length, matched: false, balance: p.balance ?? null, last4: p.account ? String(p.account).slice(-4) : null }); continue; }
+      if (!p.transactions.length) { results.push({ file: p.file, account: p.account, mapped: acc.name, count: 0, matched: true, empty: true }); continue; }
       const base = { file: p.file, account: p.account, mapped: acc.name, count: p.transactions.length, matched: true,
         sample: p.transactions.slice(0, 3).map(t => `${t.date}  ${(t.amount / 100).toFixed(2)}€  ${t.payee_name || '(sans bénéficiaire)'}`) };
       if (dryRun) { results.push(base); continue; }
