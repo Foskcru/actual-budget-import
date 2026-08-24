@@ -69,6 +69,7 @@ db.exec(`
     reset_at INTEGER NOT NULL DEFAULT 0,
     username TEXT, ip TEXT, updated INTEGER
   );
+  CREATE TABLE IF NOT EXISTS app_config ( key TEXT PRIMARY KEY, value TEXT );
 `);
 // Colonne "disabled" (compte desactive par un admin) : ajout si absente
 try { db.exec('ALTER TABLE users ADD COLUMN disabled INTEGER DEFAULT 0'); } catch {}
@@ -76,6 +77,14 @@ try { db.exec('ALTER TABLE users ADD COLUMN disabled INTEGER DEFAULT 0'); } catc
 const getSetting = (uid, k, def = '') => { const r = db.prepare('SELECT value FROM user_settings WHERE user_id=? AND key=?').get(uid, k); return r ? r.value : def; };
 const setSetting = (uid, k, v) => db.prepare('INSERT INTO user_settings(user_id,key,value) VALUES(?,?,?) ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value').run(uid, k, String(v ?? ''));
 const userCount = () => db.prepare('SELECT COUNT(*) c FROM users').get().c;
+// Config globale de l'app (ntfy...) editable par l'admin
+const getApp = (k, def = '') => { const r = db.prepare('SELECT value FROM app_config WHERE key=?').get(k); return r ? r.value : def; };
+const setApp = (k, v) => db.prepare('INSERT INTO app_config(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(k, String(v ?? ''));
+const DEFAULT_NTFY_TPL = 'Compte "{account}" bloque apres {max} echecs de connexion.\nIP : {ip}\nBlocage 24 h (ou deblocage par un admin).';
+// Pre-remplit la config ntfy depuis les variables d'env au 1er demarrage
+if (!getApp('ntfyUrl') && NTFY_URL) setApp('ntfyUrl', NTFY_URL);
+if (!getApp('ntfyToken') && NTFY_TOKEN) setApp('ntfyToken', encSecret(NTFY_TOKEN));
+if (!getApp('ntfyTemplate')) setApp('ntfyTemplate', DEFAULT_NTFY_TPL);
 // Secrets (mot de passe serveur / chiffrement) : chiffres au repos
 const getSecret = (uid, k) => decSecret(getSetting(uid, k));
 const setSecret = (uid, k, v) => setSetting(uid, k, encSecret(v));
@@ -181,16 +190,26 @@ function rlFail(keys, username, ip) {
   return became;
 }
 function rlReset(keys) { for (const k of keys) db.prepare('DELETE FROM login_locks WHERE key=?').run(k); }
+// Config + envoi ntfy (editable dans l'UI admin)
+function ntfyConf() {
+  return { url: getApp('ntfyUrl', ''), token: decSecret(getApp('ntfyToken', '')), template: getApp('ntfyTemplate', DEFAULT_NTFY_TPL) };
+}
+function renderTpl(tpl, username, ip) {
+  return String(tpl || '').replace(/\{account\}/g, username || '?').replace(/\{ip\}/g, ip || '?').replace(/\{max\}/g, String(LOCK_MAX));
+}
+async function sendNtfy(title, body) {
+  const c = ntfyConf();
+  if (!c.url) return { ok: false, error: 'URL ntfy non configuree.' };
+  try {
+    const r = await fetch(c.url, { method: 'POST', headers: { 'Title': title, 'Priority': 'high', 'Tags': 'warning,lock', ...(c.token ? { 'Authorization': 'Bearer ' + c.token } : {}) }, body });
+    if (!r.ok) return { ok: false, error: 'ntfy a repondu HTTP ' + r.status };
+    return { ok: true };
+  } catch (e) { console.error('[ntfy]', e?.message || e); return { ok: false, error: String(e?.message || e) }; }
+}
 // Alerte ntfy quand un compte se bloque (compte + IP)
 async function notifyLock(username, ip) {
-  if (!NTFY_URL) return;
-  try {
-    await fetch(NTFY_URL, {
-      method: 'POST',
-      headers: { 'Title': 'Actual Import : compte bloque', 'Priority': 'high', 'Tags': 'warning,lock', ...(NTFY_TOKEN ? { 'Authorization': 'Bearer ' + NTFY_TOKEN } : {}) },
-      body: `Compte "${username || '?'}" bloque apres ${LOCK_MAX} echecs de connexion.\nIP : ${ip || '?'}\nBlocage 24 h (ou deblocage par un admin).`,
-    });
-  } catch (e) { console.error('[ntfy]', e?.message || e); }
+  if (!ntfyConf().url) return;
+  await sendNtfy('Actual Import : compte bloque', renderTpl(ntfyConf().template, username, ip));
 }
 
 // ============================ parseur Sumeria ============================
@@ -446,6 +465,24 @@ app.post('/api/unlock', requireAuth, requireAdmin, (req, res) => {
   if (key) db.prepare('DELETE FROM login_locks WHERE key=?').run(String(key));
   else db.exec('DELETE FROM login_locks'); // tout debloquer
   res.json({ ok: true });
+});
+
+// Config ntfy (admin) : lire / enregistrer / tester
+app.get('/api/ntfy', requireAuth, requireAdmin, (_req, res) => {
+  res.json({ ok: true, url: getApp('ntfyUrl', ''), template: getApp('ntfyTemplate', DEFAULT_NTFY_TPL), hasToken: !!decSecret(getApp('ntfyToken', '')) });
+});
+app.post('/api/ntfy', requireAuth, requireAdmin, (req, res) => {
+  const b = req.body || {};
+  if (b.url !== undefined) setApp('ntfyUrl', String(b.url).trim());
+  if (b.template !== undefined) setApp('ntfyTemplate', String(b.template));
+  if (b.token) setApp('ntfyToken', encSecret(String(b.token)));
+  if (b.clearToken) setApp('ntfyToken', '');
+  res.json({ ok: true });
+});
+app.post('/api/ntfy/test', requireAuth, requireAdmin, async (req, res) => {
+  const tpl = (req.body && req.body.template != null) ? req.body.template : ntfyConf().template;
+  const r = await sendNtfy('Actual Import : test', renderTpl(tpl, 'compte-test', '192.168.0.1'));
+  res.json(r);
 });
 app.post('/api/users', requireAuth, requireAdmin, (req, res) => {
   const { username, password, isAdmin } = req.body || {};

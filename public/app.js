@@ -37,7 +37,7 @@ async function loadSettings(){
   $('s_pw').placeholder = d.hasPassword?'(inchangé)':'(vide)'; $('s_e2e').placeholder = d.hasE2e?'(inchangé)':'(vide)';
   try { ALIASES = JSON.parse(d.aliases||'{}'); } catch { ALIASES={}; }
   renderAliases(); fetchAccounts();
-  if(IS_ADMIN){ loadUsers(); loadLocks(); }
+  if(IS_ADMIN){ loadUsers(); loadLocks(); loadNtfy(); }
 }
 $('s_save').onclick = async () => {
   $('s_msg').textContent='…';
@@ -82,16 +82,39 @@ async function loadUsers(){
   document.querySelectorAll('#userList .del').forEach(a=>a.onclick=async e=>{e.preventDefault(); if(confirm('Supprimer l\'utilisateur « '+a.dataset.name+' » ?')){ await fetch('/api/users/'+a.dataset.id,{method:'DELETE'}); loadUsers(); }});
   document.querySelectorAll('#userList .tgl').forEach(a=>a.onclick=async e=>{e.preventDefault(); const act=a.dataset.act==='1'; if(confirm((act?'Désactiver':'Réactiver')+' le compte « '+a.dataset.name+' » ?')){ await fetch('/api/users/'+a.dataset.id+'/disabled',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({disabled:act})}); loadUsers(); }});
 }
+function fmtLeft(ms){
+  if(ms<=0) return 'expiré';
+  const h=Math.floor(ms/3600000), m=Math.floor((ms%3600000)/60000);
+  return h>0 ? (h+' h '+m+' min') : (m+' min');
+}
 async function loadLocks(){
   const d = await (await fetch('/api/locks')).json(); if(!d.ok) return;
   if(!d.locks.length){ $('lockList').innerHTML='<span class="mini">Aucune connexion bloquée.</span>'; return; }
+  const now = Date.now();
   $('lockList').innerHTML = d.locks.map(l=>{
     const who = l.key && l.key.indexOf('u:')===0 ? ('compte « '+esc(l.username||l.key.slice(2))+' »') : ('IP '+esc(l.ip||(l.key||'').slice(3)));
-    const until = new Date(l.reset_at).toLocaleString('fr-FR');
-    return `<div style="margin:3px 0">🔒 ${who} · ${l.count} échecs · jusqu'au ${esc(until)} &nbsp; <a href="#" class="unlk" data-key="${esc(l.key)}">débloquer</a></div>`;
+    const left = fmtLeft(l.reset_at - now);
+    return `<div style="margin:3px 0">🔒 ${who} · ${l.count} échecs · <b>reste ${esc(left)}</b> &nbsp; <a href="#" class="unlk" data-key="${esc(l.key)}">débloquer</a></div>`;
   }).join('');
   document.querySelectorAll('#lockList .unlk').forEach(a=>a.onclick=async e=>{e.preventDefault(); await fetch('/api/unlock',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key:a.dataset.key})}); loadLocks(); });
 }
+async function loadNtfy(){
+  const d = await (await fetch('/api/ntfy')).json(); if(!d.ok) return;
+  $('n_url').value = d.url||''; $('n_tpl').value = d.template||'';
+  $('n_token').placeholder = d.hasToken ? '(inchangé)' : '(aucun)';
+}
+async function saveNtfy(){
+  const body = { url:$('n_url').value, template:$('n_tpl').value };
+  if($('n_token').value) body.token = $('n_token').value;
+  await fetch('/api/ntfy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  $('n_token').value='';
+}
+$('n_save').onclick = async () => { $('n_msg').textContent='…'; await saveNtfy(); $('n_msg').textContent='Enregistré ✓'; };
+$('n_test').onclick = async () => {
+  $('n_msg').textContent='Envoi du test…'; await saveNtfy();
+  const r = await (await fetch('/api/ntfy/test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({template:$('n_tpl').value})})).json();
+  $('n_msg').textContent = r.ok ? 'Test envoyé ✓ (vérifie ntfy)' : ('Échec : '+r.error);
+};
 $('unlockAll').onclick = async () => { if(confirm('Débloquer TOUTES les connexions bloquées ?')){ await fetch('/api/unlock',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})}); loadLocks(); } };
 $('p_btn').onclick = async () => {
   $('p_msg').textContent = '…';

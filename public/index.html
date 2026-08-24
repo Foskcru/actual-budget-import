@@ -40,6 +40,7 @@
   input[type=text],input[type=password],.grid2 input{width:100%;padding:9px 11px;border-radius:8px;border:1px solid var(--line);background:var(--soft);color:var(--ink);font-size:14px}
   a.del{color:var(--err);text-decoration:none;margin-left:6px}
   select{padding:9px 11px;border-radius:8px;border:1px solid var(--line);background:var(--soft);color:var(--ink);font-size:14px}
+  textarea{width:100%;padding:9px 11px;border-radius:8px;border:1px solid var(--line);background:var(--soft);color:var(--ink);font-size:13px;font-family:inherit;resize:vertical}
 </style>
 </head>
 <body>
@@ -106,6 +107,21 @@
         <button class="ghost" id="unlockAll">Tout débloquer</button>
       </div>
       <div id="lockList" class="mini" style="margin:8px 0"></div>
+
+      <hr style="border:0;border-top:1px solid var(--line);margin:18px 0">
+      <b>Notifications ntfy</b>
+      <div class="mini" style="margin:2px 0 8px">Alerte quand un compte se bloque. Variables utilisables : <code>{account}</code>, <code>{ip}</code>, <code>{max}</code>.</div>
+      <div class="grid2">
+        <div><label class="mini">URL du topic ntfy</label><input type="text" id="n_url" placeholder="https://ntfy.../mon-topic"></div>
+        <div><label class="mini">Jeton (optionnel)</label><input type="password" id="n_token" placeholder="(inchangé)"></div>
+      </div>
+      <label class="mini" style="display:block;margin-top:8px">Message</label>
+      <textarea id="n_tpl" rows="3"></textarea>
+      <div class="row" style="gap:8px;margin-top:8px">
+        <button id="n_save">Enregistrer</button>
+        <button class="ghost" id="n_test">Envoyer un test</button>
+        <span id="n_msg" class="mini"></span>
+      </div>
     </div>
   </div>
 
