@@ -201,7 +201,11 @@ function renderAliases(){
   $('aliasRows').innerHTML = rows.length
     ? rows.map(([k,v])=>`<div class="row" style="gap:8px;margin:4px 0"><span class="mini" style="min-width:160px">${esc(k)}</span><span class="mini">→</span><span class="mini" style="flex:1">${esc(v)}</span><a href="#" class="del" data-k="${esc(k)}">✕</a></div>`).join('')
     : '<div class="mini">Aucune correspondance.</div>';
-  document.querySelectorAll('#aliasRows .del').forEach(a=>a.onclick=e=>{e.preventDefault(); delete ALIASES[a.dataset.k]; renderAliases(); saveAliases();});
+  document.querySelectorAll('#aliasRows .del').forEach(a=>a.onclick=e=>{
+    e.preventDefault();
+    const k=a.dataset.k;
+    if(confirm('Supprimer la correspondance « '+k+' → '+(ALIASES[k]||'')+' » ?')){ delete ALIASES[k]; renderAliases(); saveAliases(); }
+  });
 }
 async function fetchAccounts(){
   try { const s = await (await fetch('/api/status')).json(); if(s.ok){ ACCOUNTS=s.accounts||[]; $('acctList').innerHTML=ACCOUNTS.map(a=>`<option value="${esc(a)}"></option>`).join(''); } } catch {}
