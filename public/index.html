@@ -276,15 +276,41 @@ function render(d){
   d.results.forEach(x=>{ add+=x.added||0; del+=x.deleted||0; if(x.matched===false) ko++; });
   $('summary').innerHTML = `${mode} &nbsp; ${d.dryRun?'':`<b>${add}</b> ajoutée(s), <b>${del}</b> supprimée(s) &nbsp;`} ${ko?`<span class="tag-no">${ko} compte(s) non trouvé(s)</span>`:''}`;
   let h = '<tr><th>Fichier</th><th>Compte</th><th>Op.</th><th>Résultat</th></tr>';
+  let i = 0;
   for(const x of d.results){
     if(x.skipped){ h+=`<tr><td>${esc(x.file)}</td><td colspan="3" class="tag-skip">ignoré : ${esc(x.skipped)}</td></tr>`; continue; }
-    if(x.matched===false){ h+=`<tr><td>${esc(x.file)}</td><td>${esc(x.account)}</td><td>${x.count}</td><td class="tag-no">aucun compte Actual correspondant</td></tr>`; continue; }
+    if(x.matched===false){
+      const bal = (x.balance!=null) ? (x.balance/100).toFixed(2)+' €' : '?';
+      const suggested = x.last4 ? ('BNP …'+x.last4) : '';
+      const idx = i++;
+      const create = `
+        <div class="tag-no">Compte non connecté</div>
+        <div class="mini">n° …${esc(x.last4||'?')} · ACCTID ${esc(x.account)} · solde ${esc(bal)}</div>
+        <div class="row" style="gap:6px;margin-top:6px">
+          <input type="text" id="na_${idx}" list="acctList" placeholder="nom du compte" value="${esc(suggested)}" style="max-width:160px">
+          <label class="chk"><input type="checkbox" id="no_${idx}"> hors budget</label>
+          <button class="ghost createacc" data-i="${idx}" data-acctid="${esc(x.account)}" data-bal="${x.balance!=null?x.balance:''}">Créer le compte</button>
+        </div>`;
+      h+=`<tr><td>${esc(x.file)}</td><td>${esc(x.account)}</td><td>${x.count}</td><td>${create}</td></tr>`;
+      continue;
+    }
     let result = d.dryRun
       ? `<span class="tag-ok">→ ${esc(x.mapped)}</span><div class="mini">${(x.sample||[]).map(esc).join('<br>')}</div>`
       : `<span class="tag-ok">+${x.added} ajoutée(s)</span>${x.deleted?` · ${x.deleted} suppr.`:''}${x.updated?` · ${x.updated} maj`:''} <span class="mini">→ ${esc(x.mapped)}</span>`;
     h += `<tr><td>${esc(x.file)}</td><td>${esc(x.account)}</td><td>${x.count}</td><td>${result}</td></tr>`;
   }
   $('resTable').innerHTML = h;
+  document.querySelectorAll('.createacc').forEach(b=>b.onclick=async()=>{
+    const idx=b.dataset.i, name=$('na_'+idx).value.trim(), off=$('no_'+idx).checked;
+    if(!name){ alert('Donne un nom au compte.'); return; }
+    b.disabled=true; b.textContent='Création…';
+    const bal = b.dataset.bal==='' ? null : Number(b.dataset.bal);
+    try {
+      const r = await (await fetch('/api/create-account',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({acctid:b.dataset.acctid, name, balance:bal, offbudget:off})})).json();
+      if(!r.ok) throw new Error(r.error);
+      b.textContent='Créé ✓ — relance l\'import'; fetchAccounts();
+    } catch(e){ alert('Erreur : '+e.message); b.disabled=false; b.textContent='Créer le compte'; }
+  });
 }
 function esc(s){ return String(s).replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
 </script>

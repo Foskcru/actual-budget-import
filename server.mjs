@@ -199,6 +199,8 @@ function extractPayeeBNP(name, memo) {
 }
 function parseOFX(text) {
   const account = (text.match(/<ACCTID>([^<\r\n]+)/i) || [])[1]?.trim() || null;
+  const balM = text.match(/<LEDGERBAL>[\s\S]*?<BALAMT>([^<\r\n]+)/i) || text.match(/<BALAMT>([^<\r\n]+)/i);
+  const balance = balM ? Math.round(parseFloat(balM[1].replace(',', '.')) * 100) : null;
   const blocks = text.split(/<STMTTRN>/i).slice(1);
   const transactions = [];
   for (const b of blocks) {
@@ -215,7 +217,7 @@ function parseOFX(text) {
     if (payee) tx.payee_name = payee;
     transactions.push(tx);
   }
-  return { account, transactions };
+  return { account, balance, transactions };
 }
 
 // Regles de demarrage : [mot-cle dans les Notes, nom de categorie]
@@ -357,6 +359,27 @@ app.post('/api/settings', requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
+// --- Creer un compte Actual (avec solde) pour un compte de fichier non connu ---
+app.post('/api/create-account', requireAuth, async (req, res) => {
+  if (busy) return res.status(409).json({ ok: false, error: 'Un traitement est deja en cours.' });
+  const { acctid, name, balance, offbudget } = req.body || {};
+  if (!name || !String(name).trim()) return res.status(400).json({ ok: false, error: 'Nom de compte requis.' });
+  busy = true;
+  try {
+    await openBudget(req.user.userId);
+    const id = await api.createAccount({ name: String(name).trim(), offbudget: !!offbudget }, Number.isFinite(balance) ? Math.round(balance) : 0);
+    if (acctid) { // enregistre la correspondance acctid -> nom pour les prochains imports
+      const uid = req.user.userId;
+      let aliases = {}; try { aliases = JSON.parse(getSetting(uid, 'aliases', '{}')); } catch {}
+      aliases[String(acctid)] = String(name).trim();
+      setSetting(uid, 'aliases', JSON.stringify(aliases));
+    }
+    await api.sync();
+    res.json({ ok: true, id });
+  } catch (e) { res.status(500).json({ ok: false, error: String(e?.message || e) }); }
+  finally { busy = false; }
+});
+
 // --- Actual : statut / import / regles (auth) ---
 app.get('/api/status', requireAuth, async (req, res) => {
   if (busy) return res.status(409).json({ ok: false, error: 'Un traitement est deja en cours.' });
@@ -387,7 +410,7 @@ app.post('/api/run', requireAuth, upload.array('files'), async (req, res) => {
       else { parsed.push({ file: fname, skipped: 'format non reconnu (ni CSV Sumeria ni OFX)' }); continue; }
       if (!p.account) { parsed.push({ file: fname, skipped: kind === 'OFX' ? 'compte OFX introuvable (ACCTID)' : 'compte introuvable (ligne 2)' }); continue; }
       if (!p.transactions.length) { parsed.push({ file: fname, skipped: '0 operation' }); continue; }
-      parsed.push({ file: fname, account: p.account, transactions: p.transactions });
+      parsed.push({ file: fname, account: p.account, balance: p.balance ?? null, transactions: p.transactions });
     }
     if (!parsed.some(p => p.transactions)) { busy = false; return res.json({ ok: true, dryRun, results: parsed.map(p => ({ file: p.file, skipped: p.skipped })) }); }
 
@@ -398,7 +421,7 @@ app.post('/api/run', requireAuth, upload.array('files'), async (req, res) => {
     for (const p of parsed) {
       if (!p.transactions) { results.push({ file: p.file, skipped: p.skipped }); continue; }
       const acc = findAccount(accounts, p.account, aliases);
-      if (!acc) { results.push({ file: p.file, account: p.account, count: p.transactions.length, matched: false }); continue; }
+      if (!acc) { results.push({ file: p.file, account: p.account, count: p.transactions.length, matched: false, balance: p.balance ?? null, last4: p.account ? String(p.account).slice(-4) : null }); continue; }
       const base = { file: p.file, account: p.account, mapped: acc.name, count: p.transactions.length, matched: true,
         sample: p.transactions.slice(0, 3).map(t => `${t.date}  ${(t.amount / 100).toFixed(2)}€  ${t.payee_name || '(sans bénéficiaire)'}`) };
       if (dryRun) { results.push(base); continue; }
