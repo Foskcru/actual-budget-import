@@ -375,6 +375,9 @@ const SEED_RULES = [
 const SEED_BY_CAT = {};
 for (const [kw, cat] of SEED_RULES) { (SEED_BY_CAT[cat] ||= []).push(kw); }
 const SEED_KW = new Set(SEED_RULES.map(([kw]) => kw.toLowerCase().trim()));
+// Noms des categories utilisees par les regles de depart -> bouton "Creer les categories de depart".
+// Derive de SEED_BY_CAT : ajouter une regle ci-dessus suffit pour que sa categorie soit creee.
+const SEED_CATEGORY_NAMES = Object.keys(SEED_BY_CAT);
 
 // ============================ connexion Actual ============================
 let initialized = false, initedWith = null, busy = false, apiInternals = null;
@@ -752,6 +755,31 @@ app.post('/api/run', requireAuth, upload.array('files'), async (req, res) => {
     }
     if (!dryRun) await api.sync();
     res.json({ ok: true, dryRun, repaired, repairedTp, results, accounts: accounts.filter(a => !a.closed).map(a => a.name) });
+  } catch (e) { console.error('[erreur]', e?.message || e); res.status(500).json({ ok: false, error: String(e?.message || e) }); }
+  finally { busy = false; }
+});
+
+// Cree les categories utilisees par les regles de depart (etape 1, avant les regles).
+// Sans category_mapping une categorie ne peut porter aucune transaction -> on repare juste apres.
+app.post('/api/seed-categories', requireAuth, async (req, res) => {
+  if (busy) return res.status(409).json({ ok: false, error: 'Un traitement est deja en cours.' });
+  busy = true;
+  try {
+    await openBudget(req.user.userId);
+    const groups = await api.getCategoryGroups();
+    let groupId = (groups || []).find(g => !g.is_income)?.id;
+    if (!groupId) groupId = await api.createCategoryGroup({ name: 'Dépenses' });
+    const cats = await api.getCategories();
+    const have = new Set(cats.map(c => norm(c.name)));
+    const created = [], existing = [];
+    for (const name of SEED_CATEGORY_NAMES) {
+      if (have.has(norm(name))) { existing.push(name); continue; }
+      try { await api.createCategory({ name, group_id: groupId }); created.push(name); have.add(norm(name)); }
+      catch (e) { console.error('[seed-cat]', name, e?.message || e); }
+    }
+    const repaired = await repairCategoryMappings(); // les nouvelles categories ont besoin de leur mapping
+    await api.sync();
+    res.json({ ok: true, created, existing, repaired });
   } catch (e) { console.error('[erreur]', e?.message || e); res.status(500).json({ ok: false, error: String(e?.message || e) }); }
   finally { busy = false; }
 });

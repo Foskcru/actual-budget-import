@@ -47,6 +47,7 @@
   input[type=text],input[type=password],.grid2 input{width:100%;padding:9px 11px;border-radius:8px;border:1px solid var(--line);background:var(--soft);color:var(--ink);font-size:14px}
   a.del{color:var(--err);text-decoration:none;margin-left:6px}
   select{padding:9px 11px;border-radius:8px;border:1px solid var(--line);background:var(--soft);color:var(--ink);font-size:14px}
+  .grid2 select{width:100%}
   textarea{width:100%;padding:9px 11px;border-radius:8px;border:1px solid var(--line);background:var(--soft);color:var(--ink);font-size:13px;font-family:inherit;resize:vertical}
   .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:flex-start;justify-content:center;padding:24px 16px;z-index:50}
   .modal{background:var(--card);border:1px solid var(--line);border-radius:14px;width:100%;max-width:640px;max-height:88vh;display:flex;flex-direction:column;box-shadow:0 12px 44px rgba(0,0,0,.55)}
@@ -103,13 +104,20 @@
         <div class="tabpane" data-pane="accts" style="display:none">
           <b>Correspondances de comptes</b>
           <div class="mini" style="margin:2px 0 8px">Relie un compte du fichier à un compte Actual (enregistré automatiquement). La clé selon la banque : <b>nom du compte</b> (Sumeria CSV), <b>n° ACCTID</b> (BNP OFX), <b>nom du fichier</b> (SG QIF).</div>
-          <datalist id="acctList"></datalist>
           <div id="aliasRows"></div>
-          <div class="row" style="gap:8px;margin-top:8px">
-            <input type="text" id="a_key" placeholder="ex. 00050014183 / Économie" style="max-width:180px">
-            <span class="mini">→</span>
-            <input type="text" id="a_val" list="acctList" placeholder="compte Actual" style="max-width:180px">
-            <button class="ghost" id="a_add">Ajouter</button>
+          <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
+            <label class="mini" style="display:block;margin-bottom:6px"><b>Ajouter une correspondance</b></label>
+            <div class="grid2" style="gap:10px">
+              <div>
+                <label class="mini">Compte du fichier (clé)</label>
+                <input type="text" id="a_key" placeholder="ex. 00050014183 / Économie">
+              </div>
+              <div>
+                <label class="mini">→ Compte Actual à lier</label>
+                <select id="a_val"><option value="">— choisir un compte —</option></select>
+              </div>
+            </div>
+            <div class="row" style="margin-top:10px"><button class="ghost" id="a_add">Ajouter la correspondance</button></div>
           </div>
         </div>
 
@@ -185,14 +193,14 @@
   </div>
 
   <div class="card">
-    <div class="row" style="justify-content:space-between">
-      <div>
-        <b>Catégorisation automatique</b>
-        <div class="mini" style="margin-top:2px">Crée un jeu de règles de départ (Carrefour→Alimentation, etc.). À affiner ensuite dans Actual → Règles.</div>
-      </div>
-      <button class="ghost" id="btnRules">Créer les règles de départ</button>
+    <b>Catégorisation automatique</b>
+    <div class="mini" style="margin-top:2px">Deux étapes, dans l'ordre : d'abord créer les catégories dans Actual, puis les règles qui les remplissent (Carrefour → Alimentation, etc.). À affiner ensuite dans Actual → Règles.</div>
+    <div class="row" style="gap:10px;margin-top:12px">
+      <button class="ghost" id="btnCats">1 · Créer les catégories de départ</button>
+      <button class="ghost" id="btnRules">2 · Créer les règles de départ</button>
     </div>
-    <div id="rulesRes" class="mini" style="margin-top:10px"></div>
+    <div id="catsRes" class="mini" style="margin-top:10px"></div>
+    <div id="rulesRes" class="mini" style="margin-top:6px"></div>
   </div>
 
   <div class="card" id="resCard" style="display:none">

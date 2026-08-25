@@ -68,7 +68,18 @@ function renderAliases(){
   });
 }
 async function fetchAccounts(){
-  try { const s = await (await fetch('/api/status')).json(); if(s.ok){ ACCOUNTS=s.accounts||[]; $('acctList').innerHTML=ACCOUNTS.map(a=>`<option value="${esc(a)}"></option>`).join(''); } } catch {}
+  try {
+    const s = await (await fetch('/api/status')).json();
+    if(s.ok){
+      ACCOUNTS = s.accounts||[];
+      const sel = $('a_val');
+      if(sel){
+        const cur = sel.value;
+        sel.innerHTML = '<option value="">— choisir un compte —</option>' + ACCOUNTS.map(a=>`<option value="${esc(a)}">${esc(a)}</option>`).join('');
+        if(cur && ACCOUNTS.includes(cur)) sel.value = cur;
+      }
+    }
+  } catch {}
 }
 async function saveAliases(){
   await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({aliases:JSON.stringify(ALIASES)})});
@@ -159,6 +170,21 @@ $('btnRun').onclick = async () => {
   finally { $('btnRun').disabled = false; $('btnRun').textContent = 'Lancer'; }
 };
 
+$('btnCats').onclick = async () => {
+  $('btnCats').disabled = true; $('btnCats').textContent = 'Création…';
+  $('catsRes').textContent = '';
+  try {
+    const r = await fetch('/api/seed-categories', { method:'POST' });
+    const d = await r.json();
+    if(!d.ok) throw new Error(d.error);
+    let msg = `<span class="tag-ok">${d.created.length} catégorie(s) créée(s)</span>`;
+    if(d.existing.length) msg += ` · ${d.existing.length} déjà présente(s)`;
+    if(d.created.length) msg += `<br>Créées : ${d.created.map(esc).join(' · ')}`;
+    $('catsRes').innerHTML = msg;
+  } catch(e){ $('catsRes').innerHTML = `<span class="tag-no">Erreur : ${esc(e.message)}</span>`; }
+  finally { $('btnCats').disabled = false; $('btnCats').textContent = '1 · Créer les catégories de départ'; }
+};
+
 $('btnRules').onclick = async () => {
   $('btnRules').disabled = true; $('btnRules').textContent = 'Création…';
   $('rulesRes').textContent = '';
@@ -172,7 +198,7 @@ $('btnRules').onclick = async () => {
     if(d.done?.length) msg += `<br>${d.done.map(esc).join(' · ')}`;
     $('rulesRes').innerHTML = msg;
   } catch(e){ $('rulesRes').innerHTML = `<span class="tag-no">Erreur : ${esc(e.message)}</span>`; }
-  finally { $('btnRules').disabled = false; $('btnRules').textContent = 'Créer les règles de départ'; }
+  finally { $('btnRules').disabled = false; $('btnRules').textContent = '2 · Créer les règles de départ'; }
 };
 
 function render(d){
