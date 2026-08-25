@@ -695,8 +695,11 @@ app.post('/api/run', requireAuth, upload.array('files'), async (req, res) => {
           const ex = byImp.get(t.imported_id);
           if (!ex) continue;
           found++;
-          try { await api.updateTransaction(ex.id, { category: t.category }); updated2++; }
-          catch (e) { if (!err) err = String(e?.message || e); }
+          try {
+            const ret = await api.updateTransaction(ex.id, { category: t.category });
+            if (Array.isArray(ret) && ret.length) updated2++;
+            else if (!err) err = `noop retLen=${Array.isArray(ret) ? ret.length : typeof ret} exCat=${ex.category ?? 'null'} id=${String(ex.id).slice(0, 8)}`;
+          } catch (e) { if (!err) err = 'THROW:' + String(e?.message || e); }
         }
       }
       base.dbg = { ...base.dbg, need: needCat.length, found, updated: updated2, err };
