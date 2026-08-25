@@ -425,7 +425,7 @@ async function buildCategoryMatcher() {
     if (!notesConds.length) continue;
     matchers.push({ op: r.conditionsOp || 'and', kws: notesConds.map(c => String(c.value).toLowerCase()), catId: setCat.value });
   }
-  return (notes) => {
+  const fn = (notes) => {
     const n = String(notes || '').toLowerCase();
     for (const m of matchers) {
       const hit = m.op === 'and' ? m.kws.every(k => n.includes(k)) : m.kws.some(k => n.includes(k));
@@ -433,6 +433,10 @@ async function buildCategoryMatcher() {
     }
     return null;
   };
+  fn.count = matchers.length;
+  fn.rulesTotal = rules.length;
+  fn.catsTotal = cats.length;
+  return fn;
 }
 
 // ============================ serveur web ============================
@@ -668,6 +672,7 @@ app.post('/api/run', requireAuth, upload.array('files'), async (req, res) => {
       let categorized = 0;
       for (const t of p.transactions) { if (!t.category) { const c = matchCat(t.notes); if (c) { t.category = c; categorized++; } } }
       const base = { file: p.file, account: p.account, mapped: acc.name, count: p.transactions.length, matched: true, categorized,
+        dbg: { matchers: matchCat.count, rules: matchCat.rulesTotal, cats: matchCat.catsTotal, tagged: categorized },
         sample: p.transactions.slice(0, 3).map(t => `${t.date}  ${(t.amount / 100).toFixed(2)}€  ${t.payee_name || '(sans bénéficiaire)'}`) };
       if (dryRun) { results.push(base); continue; }
       if (replaceExisting) {
@@ -681,17 +686,20 @@ app.post('/api/run', requireAuth, upload.array('files'), async (req, res) => {
       base.added = r.added?.length ?? 0; base.updated = r.updated?.length ?? 0;
       // Garantit la categorie : on la (re)pose explicitement apres import, par Ref. interne
       const needCat = p.transactions.filter(t => t.category && t.imported_id);
+      let found = 0, updated2 = 0, err = null;
       if (needCat.length) {
         const dates = p.transactions.map(t => t.date).sort();
         const existing = await api.getTransactions(acc.id, dates[0], dates[dates.length - 1]);
         const byImp = new Map(existing.filter(e => e.imported_id).map(e => [e.imported_id, e]));
-        let done2 = 0;
         for (const t of needCat) {
           const ex = byImp.get(t.imported_id);
-          if (ex && !ex.category) { try { await api.updateTransaction(ex.id, { category: t.category }); done2++; } catch {} }
+          if (!ex) continue;
+          found++;
+          try { await api.updateTransaction(ex.id, { category: t.category }); updated2++; }
+          catch (e) { if (!err) err = String(e?.message || e); }
         }
-        base.categorized = done2 || base.categorized;
       }
+      base.dbg = { ...base.dbg, need: needCat.length, found, updated: updated2, err };
       results.push(base);
     }
     if (!dryRun) await api.sync();
