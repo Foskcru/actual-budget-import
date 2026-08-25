@@ -313,7 +313,8 @@ $('btnCats').onclick = async () => {
     if(!d.ok) throw new Error(d.error);
     let msg = `<span class="tag-ok">${d.created.length} catégorie(s) créée(s)</span>`;
     if(d.existing.length) msg += ` · ${d.existing.length} déjà présente(s)`;
-    if(d.moved) msg += ` · ${d.moved} déplacée(s)/réorganisée(s)`;
+    if(d.moved) msg += ` · ${d.moved} déplacée(s) de groupe`;
+    if(d.ordered) msg += ` · ${d.ordered} réordonnée(s)`;
     if(d.renamedGroup) msg += ` · groupe revenu renommé en « ${esc(d.renamedGroup)} »`;
     if(d.created.length) msg += `<br>Créées : ${d.created.map(esc).join(' · ')}`;
     $('catsRes').innerHTML = msg;

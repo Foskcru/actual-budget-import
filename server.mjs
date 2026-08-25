@@ -893,25 +893,40 @@ app.post('/api/seed-categories', requireAuth, async (req, res) => {
         if (!gid) { gid = await api.createCategoryGroup({ name: g.group }); expenseByName.set(norm(g.group), gid); }
       }
       gidByIndex[gi] = gid;
-      try { await api.updateCategoryGroup(gid, { sort_order: gi }); } catch {} // ordre des groupes (best effort)
       for (const name of g.cats) {
         if (have.has(norm(name))) { existing.push(name); continue; }
         try { const id = await api.createCategory({ name, group_id: gid, is_income: !!g.income }); created.push(name); have.add(norm(name)); catByName.set(norm(name), { id, group_id: gid, name }); }
         catch (e) { console.error('[seed-cat]', name, e?.message || e); }
       }
     }
-    // Passe 2 : deplacer les categories existantes vers leur groupe configure + appliquer l'ordre.
-    for (let gi = 0; gi < cfgGroups.length; gi++) {
-      const g = cfgGroups[gi]; const gid = gidByIndex[gi];
-      for (let ci = 0; ci < g.cats.length; ci++) {
-        const c = catByName.get(norm(g.cats[ci])); if (!c) continue;
-        if (gid && c.group_id && c.group_id !== gid) { try { await api.updateCategory(c.id, { group_id: gid }); c.group_id = gid; moved++; } catch (e) { console.error('[seed-move]', e?.message || e); } }
-        try { await api.updateCategory(c.id, { sort_order: ci }); } catch {} // ordre des categories (best effort)
+    // Passe 2 : ordre & groupes via les handlers internes d'Actual (seul vrai mecanisme de tri).
+    // On deplace chaque element "a la fin" dans l'ordre de la config -> ordre final = ordre de la config.
+    const canSend = typeof apiInternals?.send === 'function';
+    let ordered = 0;
+    if (canSend) {
+      for (let gi = 0; gi < cfgGroups.length; gi++) { // ordre des groupes
+        try { await apiInternals.send('category-group-move', { id: gidByIndex[gi], targetId: null }); } catch (e) { console.error('[grp-move]', e?.message || e); }
+      }
+      for (let gi = 0; gi < cfgGroups.length; gi++) { // ordre des categories + placement dans le bon groupe
+        const g = cfgGroups[gi], gid = gidByIndex[gi];
+        for (const name of g.cats) {
+          const c = catByName.get(norm(name)); if (!c) continue;
+          try { await apiInternals.send('category-move', { id: c.id, groupId: gid, targetId: null }); ordered++; if (c.group_id && c.group_id !== gid) moved++; }
+          catch (e) { console.error('[cat-move]', e?.message || e); }
+        }
+      }
+    } else { // repli : au moins deplacer vers le bon groupe (sans ordre)
+      for (let gi = 0; gi < cfgGroups.length; gi++) {
+        const g = cfgGroups[gi], gid = gidByIndex[gi];
+        for (const name of g.cats) {
+          const c = catByName.get(norm(name)); if (!c || !gid || !c.group_id || c.group_id === gid) continue;
+          try { await api.updateCategory(c.id, { group_id: gid }); moved++; } catch (e) { console.error('[seed-move]', e?.message || e); }
+        }
       }
     }
     const repaired = await repairCategoryMappings(); // les nouvelles categories ont besoin de leur mapping
     await api.sync();
-    res.json({ ok: true, created, existing, repaired, renamedGroup, moved });
+    res.json({ ok: true, created, existing, repaired, renamedGroup, moved, ordered });
   } catch (e) { console.error('[erreur]', e?.message || e); res.status(500).json({ ok: false, error: String(e?.message || e) }); }
   finally { busy = false; }
 });
