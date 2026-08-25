@@ -404,6 +404,8 @@ const SEED_GROUPS = [
   { group: 'Loisirs & plaisirs', cats: ['Restaurants', 'Shopping / Vêtements', 'Sorties', 'Loisirs / Hobbies', 'Vacances / Voyages', 'Cadeaux (Noël, anniv.)'] },
   { group: 'Autre', cats: [CONFLICT_CATEGORY_NAME] },
 ];
+// Categories de revenus : creees dans le groupe de type "revenu" (existant, sinon cree).
+const SEED_INCOME_GROUP = { group: 'Revenus', cats: ['Salaire', 'Remboursements', 'Autres revenus'] };
 
 // ============================ connexion Actual ============================
 let initialized = false, initedWith = null, busy = false, apiInternals = null;
@@ -810,6 +812,14 @@ app.post('/api/seed-categories', requireAuth, async (req, res) => {
         try { await api.createCategory({ name, group_id: gid }); created.push(name); have.add(norm(name)); }
         catch (e) { console.error('[seed-cat]', name, e?.message || e); }
       }
+    }
+    // Revenus : dans le groupe de type "revenu" existant (sinon on le cree).
+    let incId = (groups || []).find(g => g.is_income)?.id;
+    if (!incId) incId = await api.createCategoryGroup({ name: SEED_INCOME_GROUP.group, is_income: true });
+    for (const name of SEED_INCOME_GROUP.cats) {
+      if (have.has(norm(name))) { existing.push(name); continue; }
+      try { await api.createCategory({ name, group_id: incId, is_income: true }); created.push(name); have.add(norm(name)); }
+      catch (e) { console.error('[seed-cat]', name, e?.message || e); }
     }
     const repaired = await repairCategoryMappings(); // les nouvelles categories ont besoin de leur mapping
     await api.sync();
