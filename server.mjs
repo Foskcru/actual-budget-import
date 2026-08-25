@@ -329,34 +329,69 @@ function parseOFX(text) {
   return { account, balance, transactions };
 }
 
-// ---- QIF (Societe Generale et autres) ----
+// ---- Societe Generale : extraction du beneficiaire (carte, prelevement SEPA) ----
 function extractPayeeSG(N, P, M) {
   const m = String(M || ''); let mm;
   if ((mm = m.match(/CARTE\s+\S+\s+\d{2}\/\d{2}\s+(.+?)\s+\d{6,}\w*\s*$/i))) return mm[1].replace(/\s+/g, ' ').trim();
+  if ((mm = m.match(/\bDE:\s*(.+?)\s+ID:/i))) return mm[1].replace(/\s+/g, ' ').trim(); // prelevement SEPA : creancier
   const cleaned = m.replace(/\s+\d{6,}\w*\s*$/, '').trim();
   return cleaned || String(P || '').trim() || String(N || '').trim() || null;
 }
-function parseQIF(text) {
-  const norm = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+// ---- CSV Societe Generale (remplace le QIF). Fichiers en latin1, separateur ';'. ----
+// Le compte SG est identifie par le nom de fichier (ex. 00050014183 ; Export_00070187275_...).
+function sgAccountFromName(fname) {
+  const base = String(fname || '').replace(/\.[^.]*$/, '');
+  const m = base.match(/Export_(\d+)_/i) || base.match(/(\d{6,})/);
+  return m ? m[1] : base;
+}
+// Pas d'identifiant unique cote SG -> id synthetique (sha1 date+montant+memo) pour la dedup.
+function sgId(iso, cents, memo) {
+  return 'sg-' + crypto.createHash('sha1').update(iso + '|' + cents + '|' + (memo || '')).digest('hex').slice(0, 20);
+}
+// Format "simple" (livrets) : entete date_comptabilisation;libelle_complet_operation;montant_operation;devise
+function parseSGSimple(text) {
+  const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+  const hi = lines.findIndex(l => /date_comptabilisation/i.test(l));
+  if (hi < 0) return { transactions: [] };
   const transactions = [];
-  for (const blk of norm.split(/\n\^/)) {
-    let date = null, amount = null, N = '', P = '', M = '';
-    for (const ln of blk.split('\n')) {
-      const s = ln.trim(); if (!s || s[0] === '!') continue;
-      const t = s[0], v = s.slice(1);
-      if (t === 'D') date = v; else if (t === 'T') amount = v;
-      else if (t === 'N') N = v; else if (t === 'P') P = v; else if (t === 'M') M = v;
-    }
-    if (!date || amount == null) continue;
-    const iso = toISO(date, null); if (!iso) continue;
-    const cents = toCents(amount); if (cents == null) continue;
-    const payee = extractPayeeSG(N, P, M);
-    const imported_id = 'sg-' + crypto.createHash('sha1').update(iso + '|' + cents + '|' + (M || P || '')).digest('hex').slice(0, 20);
-    const tx = { date: iso, amount: cents, notes: (M || P) || null, imported_id, cleared: true };
+  for (const ln of lines.slice(hi + 1)) {
+    const c = ln.split(';');
+    if (c.length < 3) continue;
+    const iso = toISO(c[0], null); if (!iso) continue;
+    const cents = toCents(c[2]); if (cents == null) continue; // signe porte par le montant
+    const libelle = String(c[1] || '').replace(/\s+/g, ' ').trim();
+    const payee = extractPayeeSG('', '', libelle);
+    const tx = { date: iso, amount: cents, notes: libelle || null, imported_id: sgId(iso, cents, libelle), cleared: true };
     if (payee) tx.payee_name = payee;
     transactions.push(tx);
   }
   return { transactions };
+}
+// Format "detaille" (compte principal) : Date de l'op.;Libelle;Detail de l'ecriture;Montant de l'op.;Devise
+function parseSGDetail(text) {
+  const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+  const hi = lines.findIndex(l => /Montant de l/i.test(l) && /Devise/i.test(l));
+  if (hi < 0) return { transactions: [] };
+  // Solde lu dans la ligne de meta (1re ligne non vide) : dernier champ du type "1000,00 EUR".
+  let balance = null;
+  const meta = lines.find(l => l.trim() !== '');
+  if (meta) { const f = meta.split(';').find(x => /EUR/i.test(x)); if (f) balance = toCents(f); }
+  const transactions = [];
+  for (const ln of lines.slice(hi + 1)) {
+    const c = ln.split(';');
+    if (c.length < 4) continue;
+    const iso = toISO(c[0], null); if (!iso) continue;
+    const cents = toCents(c[3]); if (cents == null) continue; // signe porte par le montant
+    const libelle = String(c[1] || '').replace(/\s+/g, ' ').trim();
+    const detail = String(c[2] || '').replace(/\s+/g, ' ').trim();
+    const memo = detail || libelle;
+    const payee = extractPayeeSG(libelle, '', memo);
+    const notes = [libelle, detail].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i).join(' — ') || null;
+    const tx = { date: iso, amount: cents, notes, imported_id: sgId(iso, cents, memo), cleared: true };
+    if (payee) tx.payee_name = payee;
+    transactions.push(tx);
+  }
+  return { balance, transactions };
 }
 
 // Categorie speciale "garde-fou" : si un libelle matche PLUSIEURS categories differentes a la fois,
@@ -721,11 +756,12 @@ app.post('/api/run', requireAuth, upload.array('files'), async (req, res) => {
       const text = f.buffer.toString('utf8');
       let p, kind;
       if (/<OFX>|<STMTTRN>/i.test(text)) { p = parseOFX(text); kind = 'OFX'; }
-      else if (/^\s*!type:/i.test(text)) { p = parseQIF(text); p.account = fname.replace(/\.[^.]*$/, ''); kind = 'QIF'; }
       else if (/Nom du compte,/i.test(text)) { p = parseSumeria(text); kind = 'Sumeria'; }
-      else { parsed.push({ file: fname, skipped: 'format non reconnu (ni CSV Sumeria, ni OFX, ni QIF)' }); continue; }
+      else if (/date_comptabilisation/i.test(text)) { p = parseSGSimple(f.buffer.toString('latin1')); p.account = sgAccountFromName(fname); kind = 'SG'; }
+      else if (/Montant de l/i.test(text) && /Devise/i.test(text)) { p = parseSGDetail(f.buffer.toString('latin1')); p.account = sgAccountFromName(fname); kind = 'SG'; }
+      else { parsed.push({ file: fname, skipped: 'format non reconnu (ni CSV Sumeria, ni CSV SG, ni OFX)' }); continue; }
       if (!p.account) { parsed.push({ file: fname, skipped: kind === 'OFX' ? 'compte OFX introuvable (ACCTID)' : 'compte introuvable (ligne 2)' }); continue; }
-      // Sumeria a 0 op = ignore ; OFX/QIF a 0 op = on garde pour permettre la creation/mapping du compte
+      // Sumeria a 0 op = ignore ; OFX/SG a 0 op = on garde pour permettre la creation/mapping du compte
       if (!p.transactions.length && kind === 'Sumeria') { parsed.push({ file: fname, skipped: '0 operation' }); continue; }
       parsed.push({ file: fname, account: p.account, balance: p.balance ?? null, transactions: p.transactions });
     }

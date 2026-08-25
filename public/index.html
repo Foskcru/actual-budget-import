@@ -65,7 +65,7 @@
   <div class="topbar">
     <div>
       <h1>Import données → Actual Budget</h1>
-      <p class="sub" style="margin-bottom:0">Dépose tes relevés Sumeria (CSV), BNP (OFX) ou SG (QIF). Chaque fichier part dans le bon compte, sans doublon.</p>
+      <p class="sub" style="margin-bottom:0">Dépose tes relevés Sumeria (CSV), BNP (OFX) ou SG (CSV). Chaque fichier part dans le bon compte, sans doublon.</p>
     </div>
     <div class="userbar">
       <span id="who" class="mini"></span>
@@ -103,7 +103,7 @@
 
         <div class="tabpane" data-pane="accts" style="display:none">
           <b>Correspondances de comptes</b>
-          <div class="mini" style="margin:2px 0 8px">Relie un compte du fichier à un compte Actual (enregistré automatiquement). La clé selon la banque : <b>nom du compte</b> (Sumeria CSV), <b>n° ACCTID</b> (BNP OFX), <b>nom du fichier</b> (SG QIF).</div>
+          <div class="mini" style="margin:2px 0 8px">Relie un compte du fichier à un compte Actual (enregistré automatiquement). La clé selon la banque : <b>nom du compte</b> (Sumeria CSV), <b>n° ACCTID</b> (BNP OFX), <b>nom du fichier</b> (SG CSV).</div>
           <div id="aliasRows"></div>
           <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
             <label class="mini" style="display:block;margin-bottom:6px"><b>Ajouter une correspondance</b></label>
@@ -176,8 +176,8 @@
   </div>
 
   <div class="card">
-    <div id="drop">📄 Glisse tes fichiers ici (CSV Sumeria, OFX BNP, QIF SG), ou clique pour choisir</div>
-    <input type="file" id="file" accept=".csv,.ofx,.qif" multiple hidden>
+    <div id="drop">📄 Glisse tes fichiers ici (CSV Sumeria, OFX BNP, CSV SG), ou clique pour choisir</div>
+    <input type="file" id="file" accept=".csv,.ofx" multiple hidden>
     <div class="files" id="fileList"></div>
   </div>
 
