@@ -14,12 +14,12 @@ function renderFiles(){
 }
 
 // --- authentification ---
-let IS_ADMIN = false;
+let IS_ADMIN = false, CURRENT_USER = '';
 (async function guard(){
   try {
     const m = await (await fetch('/api/me')).json();
     if(!m.ok){ location.href='/login.html'; return; }
-    IS_ADMIN = !!m.isAdmin;
+    IS_ADMIN = !!m.isAdmin; CURRENT_USER = m.username;
     $('who').textContent = m.username + (m.isAdmin ? ' · admin' : '');
     $('btnSettings').style.display='';           // chacun gère ses propres réglages
     if(IS_ADMIN) $('tabAdmin').style.display='';
@@ -82,6 +82,7 @@ async function loadUsers(){
   const d = await (await fetch('/api/users')).json(); if(!d.ok) return;
   $('userList').innerHTML = d.users.map(u=>{
     const state = u.disabled ? ' <span class="tag-no">désactivé</span>' : '';
+    if(u.username === CURRENT_USER) return `<div style="margin:3px 0">${esc(u.username)}${u.is_admin?' · admin':''} <span class="mini">(vous)</span></div>`;
     const tgl = `<a href="#" class="tgl" data-id="${u.id}" data-name="${esc(u.username)}" data-act="${u.disabled?'0':'1'}">${u.disabled?'réactiver':'désactiver'}</a>`;
     return `<div style="margin:3px 0">${esc(u.username)}${u.is_admin?' · admin':''}${state} &nbsp; ${tgl} &nbsp; <a href="#" class="del" data-id="${u.id}" data-name="${esc(u.username)}">supprimer</a></div>`;
   }).join('');
