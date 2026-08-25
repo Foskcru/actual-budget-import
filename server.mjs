@@ -367,22 +367,22 @@ const CONFLICT_CATEGORY_NAME = 'À vérifier';
 // L'ordre n'a plus d'importance : un libelle ambigu (>=2 categories) part dans "À vérifier".
 const SEED_RULES = [
   // -- Depenses fixes --
-  ['LOYER','Loyer / Crédit'],['FONCIA','Loyer / Crédit'],['CITYA','Loyer / Crédit'],['NEXITY','Loyer / Crédit'],['CREDIT IMMO','Loyer / Crédit'],['PRET IMMO','Loyer / Crédit'],['ECHEANCE PRET','Loyer / Crédit'],['MENSUALITE','Loyer / Crédit'],
+  ['LOYER','Loyer'],['FONCIA','Loyer'],['CITYA','Loyer'],['NEXITY','Loyer'],['QUITTANCE','Loyer'],['BAIL','Loyer'],
+  ['CREDIT CONSO','Crédit'],['CREDIT IMMO','Crédit'],['PRET IMMO','Crédit'],['ECHEANCE PRET','Crédit'],['MENSUALITE','Crédit'],['CETELEM','Crédit'],['SOFINCO','Crédit'],['COFIDIS','Crédit'],['FLOA','Crédit'],['YOUNITED','Crédit'],
   ['EDF','Énergie & charges'],['ENGIE','Énergie & charges'],['EKWATEUR','Énergie & charges'],['MINT ENERGIE','Énergie & charges'],['VATTENFALL','Énergie & charges'],['ENEDIS','Énergie & charges'],['GRDF','Énergie & charges'],['VEOLIA','Énergie & charges'],['SUEZ','Énergie & charges'],['SAUR','Énergie & charges'],['SYNDIC','Énergie & charges'],
   ['FREE MOBILE','Internet / Téléphone'],['ORANGE','Internet / Téléphone'],['SFR','Internet / Téléphone'],['BOUYGUES','Internet / Téléphone'],['SOSH','Internet / Téléphone'],['RED BY SFR','Internet / Téléphone'],['B&YOU','Internet / Téléphone'],['PRIXTEL','Internet / Téléphone'],['LA POSTE MOBILE','Internet / Téléphone'],
   ['COTISATION CARTE','Banque'],['FRAIS BANCAIRE','Banque'],['FRAIS TENUE','Banque'],['AGIOS','Banque'],['COMMISSION INTERV','Banque'],['ASSURANCE MOYEN PAIEMENT','Banque'],
   ['ASSURANCE','Assurances'],['MAIF','Assurances'],['MACIF','Assurances'],['MATMUT','Assurances'],['MAAF','Assurances'],['GMF','Assurances'],['AXA','Assurances'],['ALLIANZ','Assurances'],['GROUPAMA','Assurances'],['DIRECT ASSURANCE','Assurances'],['LUKO','Assurances'],
   ['MUTUELLE','Mutuelle santé'],['HARMONIE MUTUELLE','Mutuelle santé'],['MGEN','Mutuelle santé'],['ALAN','Mutuelle santé'],['APRIL','Mutuelle santé'],['MALAKOFF','Mutuelle santé'],['HENNER','Mutuelle santé'],
-  ['IMPOT','Impôts'],['DGFIP','Impôts'],['TRESOR PUBLIC','Impôts'],['FINANCES PUBLIQUES','Impôts'],['TAXE FONCIERE','Impôts'],['TAXE HABITATION','Impôts'],['ANTAI','Impôts'],['AMENDE','Impôts'],['URSSAF','Impôts'],
   ['NETFLIX','Abonnements'],['SPOTIFY','Abonnements'],['DEEZER','Abonnements'],['DISNEY','Abonnements'],['PRIME VIDEO','Abonnements'],['CANAL','Abonnements'],['APPLE.COM','Abonnements'],['ICLOUD','Abonnements'],['YOUTUBE','Abonnements'],['MICROSOFT','Abonnements'],['ADOBE','Abonnements'],['CHATGPT','Abonnements'],['OPENAI','Abonnements'],
   // -- Vie courante --
   ['CARREFOUR','Alimentation'],['LECLERC','Alimentation'],['LIDL','Alimentation'],['ALDI','Alimentation'],['AUCHAN','Alimentation'],['INTERMARCHE','Alimentation'],['MONOPRIX','Alimentation'],['FRANPRIX','Alimentation'],['SUPER U','Alimentation'],['HYPER U','Alimentation'],['CASINO','Alimentation'],['PICARD','Alimentation'],['GRAND FRAIS','Alimentation'],['BIOCOOP','Alimentation'],['BOULANGERIE','Alimentation'],
-  ['MCDO','Restaurants'],['MCDONALD','Restaurants'],['BURGER KING','Restaurants'],['KFC','Restaurants'],['SUBWAY','Restaurants'],['DELIVEROO','Restaurants'],['UBER EATS','Restaurants'],['JUST EAT','Restaurants'],['DOMINO','Restaurants'],['PIZZA','Restaurants'],['SUSHI','Restaurants'],['KEBAB','Restaurants'],['RESTAURANT','Restaurants'],['SWILE','Restaurants'],['EDENRED','Restaurants'],
-  ['SNCF','Transport'],['RATP','Transport'],['NAVIGO','Transport'],['BLABLACAR','Transport'],['OUIGO','Transport'],['FLIXBUS','Transport'],['UBER ','Transport'],['BOLT','Transport'],['PEAGE','Transport'],['VINCI AUTOROUTE','Transport'],['SANEF','Transport'],['APRR','Transport'],['ESSO','Transport'],['BP ','Transport'],['AVIA','Transport'],['CARBURANT','Transport'],['PARKING','Transport'],['INDIGO','Transport'],
-  ['IZIVIA','Recharge voiture'],['IONITY','Recharge voiture'],['SHELL RECHARGE','Recharge voiture'],['TOTALENERGIES CHARGE','Recharge voiture'],['FRESHMILE','Recharge voiture'],['CHARGEMAP','Recharge voiture'],['ALLEGO','Recharge voiture'],['POWERDOT','Recharge voiture'],['ELECTRA','Recharge voiture'],['TESLA SUPERCHARG','Recharge voiture'],
+  ['SNCF','Transport'],['RATP','Transport'],['NAVIGO','Transport'],['BLABLACAR','Transport'],['OUIGO','Transport'],['FLIXBUS','Transport'],['UBER ','Transport'],['BOLT','Transport'],['PEAGE','Transport'],['VINCI AUTOROUTE','Transport'],['SANEF','Transport'],['APRR','Transport'],['PARKING','Transport'],['INDIGO','Transport'],
+  ['ESSENCE','Essence'],['CARBURANT','Essence'],['STATION SERVICE','Essence'],['ESSO','Essence'],['BP ','Essence'],['AVIA','Essence'],['SHELL','Essence'],['AGIP','Essence'],['ELAN','Essence'],
   ['PHARMACIE','Santé'],['DOCTOLIB','Santé'],['DENTAIRE','Santé'],['DENTISTE','Santé'],['OPTICIEN','Santé'],['LABORATOIRE','Santé'],['LABO ','Santé'],['KINE','Santé'],['MEDECIN','Santé'],['CLINIQUE','Santé'],['HOPITAL','Santé'],
-  ['AMAZON','Shopping / Vêtements'],['ZALANDO','Shopping / Vêtements'],['VINTED','Shopping / Vêtements'],['ZARA','Shopping / Vêtements'],['H&M','Shopping / Vêtements'],['UNIQLO','Shopping / Vêtements'],['KIABI','Shopping / Vêtements'],['PRIMARK','Shopping / Vêtements'],['SHEIN','Shopping / Vêtements'],['ASOS','Shopping / Vêtements'],['GIFI','Shopping / Vêtements'],['CDISCOUNT','Shopping / Vêtements'],['VEEPEE','Shopping / Vêtements'],
   // -- Loisirs & plaisirs --
+  ['MCDO','Restaurants'],['MCDONALD','Restaurants'],['BURGER KING','Restaurants'],['KFC','Restaurants'],['SUBWAY','Restaurants'],['DELIVEROO','Restaurants'],['UBER EATS','Restaurants'],['JUST EAT','Restaurants'],['DOMINO','Restaurants'],['PIZZA','Restaurants'],['SUSHI','Restaurants'],['KEBAB','Restaurants'],['RESTAURANT','Restaurants'],['SWILE','Restaurants'],['EDENRED','Restaurants'],
+  ['AMAZON','Shopping / Vêtements'],['ZALANDO','Shopping / Vêtements'],['VINTED','Shopping / Vêtements'],['ZARA','Shopping / Vêtements'],['H&M','Shopping / Vêtements'],['UNIQLO','Shopping / Vêtements'],['KIABI','Shopping / Vêtements'],['PRIMARK','Shopping / Vêtements'],['SHEIN','Shopping / Vêtements'],['ASOS','Shopping / Vêtements'],['GIFI','Shopping / Vêtements'],['CDISCOUNT','Shopping / Vêtements'],['VEEPEE','Shopping / Vêtements'],
   ['PATHE','Sorties'],['GAUMONT','Sorties'],['UGC','Sorties'],['CGR','Sorties'],['MK2','Sorties'],['CINEMA','Sorties'],['THEATRE','Sorties'],['CONCERT','Sorties'],['DICE','Sorties'],['SHOTGUN','Sorties'],
   ['DECATHLON','Loisirs / Hobbies'],['GO SPORT','Loisirs / Hobbies'],['INTERSPORT','Loisirs / Hobbies'],['CULTURA','Loisirs / Hobbies'],['MICROMANIA','Loisirs / Hobbies'],['STEAM','Loisirs / Hobbies'],['PLAYSTATION','Loisirs / Hobbies'],['NINTENDO','Loisirs / Hobbies'],['BASIC FIT','Loisirs / Hobbies'],['FITNESS PARK','Loisirs / Hobbies'],['FNAC','Loisirs / Hobbies'],
   ['BOOKING','Vacances / Voyages'],['AIRBNB','Vacances / Voyages'],['EXPEDIA','Vacances / Voyages'],['HOTEL','Vacances / Voyages'],['RYANAIR','Vacances / Voyages'],['EASYJET','Vacances / Voyages'],['AIR FRANCE','Vacances / Voyages'],['TRANSAVIA','Vacances / Voyages'],['CENTER PARCS','Vacances / Voyages'],['CLUB MED','Vacances / Voyages'],['CAMPING','Vacances / Voyages'],['ABRITEL','Vacances / Voyages'],
@@ -395,10 +395,15 @@ const SEED_RULES = [
 const SEED_BY_CAT = {};
 for (const [kw, cat] of SEED_RULES) { (SEED_BY_CAT[cat] ||= []).push(kw); }
 const SEED_KW = new Set(SEED_RULES.map(([kw]) => kw.toLowerCase().trim()));
-// Categories de revenus : on NE les cree pas dans le groupe de depenses (elles restent optionnelles).
-const SEED_INCOME_CATEGORIES = new Set(['Salaire', 'Remboursements', 'Autres revenus'].map(norm));
-// Noms des categories a creer via "Creer les categories" : depenses + garde-fou (pas les revenus).
-const SEED_CATEGORY_NAMES = [CONFLICT_CATEGORY_NAME, ...Object.keys(SEED_BY_CAT).filter(n => !SEED_INCOME_CATEGORIES.has(norm(n)))];
+// Structure de budget par defaut : chaque groupe et ses categories (dans l'ordre d'affichage).
+// "Creer les categories" cree les groupes manquants et y range les categories manquantes.
+// Les revenus (Salaire, Remboursements, Autres revenus) ne sont PAS crees ici (reliés si presents).
+const SEED_GROUPS = [
+  { group: 'Dépenses fixes', cats: ['Loyer', 'Crédit', 'Énergie & charges', 'Internet / Téléphone', 'Banque', 'Assurances', 'Mutuelle santé', 'Abonnements'] },
+  { group: 'Vie courante', cats: ['Alimentation', 'Transport', 'Essence', 'Santé', 'Divers'] },
+  { group: 'Loisirs & plaisirs', cats: ['Restaurants', 'Shopping / Vêtements', 'Sorties', 'Loisirs / Hobbies', 'Vacances / Voyages', 'Cadeaux (Noël, anniv.)'] },
+  { group: 'Autre', cats: [CONFLICT_CATEGORY_NAME] },
+];
 
 // ============================ connexion Actual ============================
 let initialized = false, initedWith = null, busy = false, apiInternals = null;
@@ -793,15 +798,18 @@ app.post('/api/seed-categories', requireAuth, async (req, res) => {
   try {
     await openBudget(req.user.userId);
     const groups = await api.getCategoryGroups();
-    let groupId = (groups || []).find(g => !g.is_income)?.id;
-    if (!groupId) groupId = await api.createCategoryGroup({ name: 'Dépenses' });
+    const groupByName = new Map((groups || []).filter(g => !g.is_income).map(g => [norm(g.name), g.id]));
     const cats = await api.getCategories();
     const have = new Set(cats.map(c => norm(c.name)));
     const created = [], existing = [];
-    for (const name of SEED_CATEGORY_NAMES) {
-      if (have.has(norm(name))) { existing.push(name); continue; }
-      try { await api.createCategory({ name, group_id: groupId }); created.push(name); have.add(norm(name)); }
-      catch (e) { console.error('[seed-cat]', name, e?.message || e); }
+    for (const { group, cats: names } of SEED_GROUPS) {
+      let gid = groupByName.get(norm(group));
+      if (!gid) { gid = await api.createCategoryGroup({ name: group }); groupByName.set(norm(group), gid); }
+      for (const name of names) {
+        if (have.has(norm(name))) { existing.push(name); continue; }
+        try { await api.createCategory({ name, group_id: gid }); created.push(name); have.add(norm(name)); }
+        catch (e) { console.error('[seed-cat]', name, e?.message || e); }
+      }
     }
     const repaired = await repairCategoryMappings(); // les nouvelles categories ont besoin de leur mapping
     await api.sync();
