@@ -400,6 +400,26 @@ async function repairCategoryMappings() {
     return fixed;
   } catch (e) { console.error('[repair]', e?.message || e); return 0; }
 }
+// Repare les comptes crees sans "beneficiaire de transfert" (ex. via un import de structure)
+// -> sans lui, impossible de faire un transfert vers/depuis ce compte dans Actual.
+async function repairTransferPayees() {
+  try {
+    if (!apiInternals?.db) return 0;
+    const accts = await apiInternals.db.all('SELECT id FROM accounts WHERE tombstone = 0', []);
+    const tps = await apiInternals.db.all('SELECT transfer_acct FROM payees WHERE transfer_acct IS NOT NULL', []);
+    const have = new Set((tps || []).map(p => p.transfer_acct));
+    let fixed = 0;
+    for (const a of accts) {
+      if (!have.has(a.id)) {
+        const pid = crypto.randomUUID();
+        await apiInternals.db.insert('payees', { id: pid, name: '', transfer_acct: a.id });
+        await apiInternals.db.insert('payee_mapping', { id: pid, targetId: pid });
+        fixed++;
+      }
+    }
+    return fixed;
+  } catch (e) { console.error('[repair-tp]', e?.message || e); return 0; }
+}
 async function openBudget(uid) {
   await ensureInit(uid);
   const c = cfg(uid);
@@ -644,8 +664,11 @@ app.get('/api/status', requireAuth, async (req, res) => {
     const { budgets, syncId } = await openBudget(req.user.userId);
     let version = null;
     try { const v = await api.getServerVersion(); version = (v && typeof v === 'object') ? (v.version || JSON.stringify(v)) : v; } catch {}
+    const repaired = await repairCategoryMappings();       // repare categories sans mapping
+    const repairedTp = await repairTransferPayees();       // repare comptes sans beneficiaire de transfert
+    if (repaired || repairedTp) { try { await api.sync(); } catch {} }
     const accounts = await api.getAccounts();
-    res.json({ ok: true, serverVersion: version, syncId, budgets: budgets.map(b => b.name), accounts: accounts.filter(a => !a.closed).map(a => a.name) });
+    res.json({ ok: true, serverVersion: version, syncId, repaired, repairedTp, budgets: budgets.map(b => b.name), accounts: accounts.filter(a => !a.closed).map(a => a.name) });
   } catch (e) { console.error('[erreur]', e?.message || e); res.status(500).json({ ok: false, error: String(e?.message || e) }); }
   finally { busy = false; }
 });
@@ -674,6 +697,8 @@ app.post('/api/run', requireAuth, upload.array('files'), async (req, res) => {
 
     await openBudget(req.user.userId);
     const repaired = await repairCategoryMappings(); // repare les categories sans mapping
+    const repairedTp = await repairTransferPayees(); // repare les comptes sans beneficiaire de transfert
+    if (repaired || repairedTp) { try { await api.sync(); } catch {} }
     const accounts = await api.getAccounts();
     const aliases = cfg(req.user.userId).aliases;
     const matchCat = await buildCategoryMatcher(); // categorisation directe via les regles
@@ -726,7 +751,7 @@ app.post('/api/run', requireAuth, upload.array('files'), async (req, res) => {
       results.push(base);
     }
     if (!dryRun) await api.sync();
-    res.json({ ok: true, dryRun, repaired, results, accounts: accounts.filter(a => !a.closed).map(a => a.name) });
+    res.json({ ok: true, dryRun, repaired, repairedTp, results, accounts: accounts.filter(a => !a.closed).map(a => a.name) });
   } catch (e) { console.error('[erreur]', e?.message || e); res.status(500).json({ ok: false, error: String(e?.message || e) }); }
   finally { busy = false; }
 });

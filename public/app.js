@@ -139,7 +139,8 @@ $('btnStatus').onclick = async () => {
   try {
     const r = await fetch('/api/status'); const d = await r.json();
     if(!d.ok) throw new Error(d.error);
-    $('status').innerHTML = `<span class="pill ok">connecté</span> serveur v${d.serverVersion||'?'} · ${d.accounts.length} comptes · budget ouvert`;
+    const rep = (d.repaired||d.repairedTp) ? ` · <span class="tag-ok">réparé : ${d.repaired||0} catégorie(s), ${d.repairedTp||0} compte(s)</span>` : '';
+    $('status').innerHTML = `<span class="pill ok">connecté</span> serveur v${d.serverVersion||'?'} · ${d.accounts.length} comptes · budget ouvert${rep}`;
   } catch(e){ $('status').innerHTML = `<span class="pill err">échec</span> ${e.message}`; }
 };
 
@@ -179,7 +180,7 @@ function render(d){
   const mode = d.dryRun ? '<span class="pill" style="background:var(--soft);color:var(--muted)">SIMULATION</span>' : '<span class="pill ok">IMPORT RÉEL</span>';
   let add=0, del=0, ko=0;
   d.results.forEach(x=>{ add+=x.added||0; del+=x.deleted||0; if(x.matched===false) ko++; });
-  $('summary').innerHTML = `${mode} &nbsp; ${d.dryRun?'':`<b>${add}</b> ajoutée(s), <b>${del}</b> supprimée(s) &nbsp;`}${d.repaired?`<span class="tag-ok">${d.repaired} catégorie(s) réparée(s)</span> &nbsp;`:''}${ko?`<span class="tag-no">${ko} compte(s) non trouvé(s)</span>`:''}`;
+  $('summary').innerHTML = `${mode} &nbsp; ${d.dryRun?'':`<b>${add}</b> ajoutée(s), <b>${del}</b> supprimée(s) &nbsp;`}${d.repaired?`<span class="tag-ok">${d.repaired} catégorie(s) réparée(s)</span> &nbsp;`:''}${d.repairedTp?`<span class="tag-ok">${d.repairedTp} compte(s) réparé(s)</span> &nbsp;`:''}${ko?`<span class="tag-no">${ko} compte(s) non trouvé(s)</span>`:''}`;
   let h = '<tr><th>Fichier</th><th>Compte</th><th>Op.</th><th>Résultat</th></tr>';
   let i = 0;
   for(const x of d.results){
