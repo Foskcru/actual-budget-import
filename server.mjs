@@ -813,8 +813,15 @@ app.post('/api/seed-categories', requireAuth, async (req, res) => {
         catch (e) { console.error('[seed-cat]', name, e?.message || e); }
       }
     }
-    // Revenus : dans le groupe de type "revenu" existant (sinon on le cree).
-    let incId = (groups || []).find(g => g.is_income)?.id;
+    // Revenus : dans le groupe de type "revenu". On francise le groupe par defaut d'Actual
+    // ("Income" -> "Revenus") sans jamais ecraser un nom personnalise par l'utilisateur.
+    const incGroup = (groups || []).find(g => g.is_income);
+    let incId = incGroup?.id;
+    let renamedGroup = null;
+    if (incGroup && norm(incGroup.name) === 'income') {
+      try { await api.updateCategoryGroup(incGroup.id, { name: SEED_INCOME_GROUP.group }); renamedGroup = SEED_INCOME_GROUP.group; }
+      catch (e) { console.error('[seed-grp]', e?.message || e); }
+    }
     if (!incId) incId = await api.createCategoryGroup({ name: SEED_INCOME_GROUP.group, is_income: true });
     for (const name of SEED_INCOME_GROUP.cats) {
       if (have.has(norm(name))) { existing.push(name); continue; }
@@ -823,7 +830,7 @@ app.post('/api/seed-categories', requireAuth, async (req, res) => {
     }
     const repaired = await repairCategoryMappings(); // les nouvelles categories ont besoin de leur mapping
     await api.sync();
-    res.json({ ok: true, created, existing, repaired });
+    res.json({ ok: true, created, existing, repaired, renamedGroup });
   } catch (e) { console.error('[erreur]', e?.message || e); res.status(500).json({ ok: false, error: String(e?.message || e) }); }
   finally { busy = false; }
 });
