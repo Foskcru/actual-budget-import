@@ -98,7 +98,8 @@ function seedCatRow(c, conflictName){
   const isConf = norm2(c.name) === norm2(conflictName);
   return `<div class="cat" style="margin:6px 0;padding:6px 0;border-top:1px solid var(--line)">
       <div class="row" style="gap:8px">
-        <input type="text" class="catName" value="${esc(c.name||'')}" placeholder="catégorie" style="flex:1;max-width:220px">
+        <span class="chandle" draggable="true" title="Glisser pour déplacer / réordonner">⠿</span>
+        <input type="text" class="catName" value="${esc(c.name||'')}" placeholder="catégorie" style="flex:1;max-width:200px">
         <label class="chk" title="Catégorie garde-fou (libellés ambigus)"><input type="radio" name="seedConflict" class="catConf" ${isConf?'checked':''}> garde-fou</label>
         <a href="#" class="del catDel" title="Supprimer la catégorie">✕</a>
       </div>
@@ -109,6 +110,8 @@ function seedGroupRow(g, conflictName){
   const cats = (g.cats||[]).map(c=>seedCatRow(c, conflictName)).join('');
   return `<div class="grp" style="border:1px solid var(--line);border-radius:10px;padding:10px;margin-bottom:10px">
       <div class="row" style="gap:8px">
+        <span class="gcaret" title="Replier / déplier">▾</span>
+        <span class="ghandle" draggable="true" title="Glisser pour réordonner">⠿</span>
         <input type="text" class="grpName" value="${esc(g.name||'')}" placeholder="nom du groupe" style="flex:1;font-weight:600">
         <label class="chk" title="Groupe de revenus"><input type="checkbox" class="grpInc" ${g.income?'checked':''}> revenu</label>
         <a href="#" class="del grpDel" title="Supprimer le groupe">✕ groupe</a>
@@ -122,7 +125,7 @@ function growSeedTextareas(){ document.querySelectorAll('#seedEditor .catKws').f
 function renderSeedEditor(cfg){
   SEED_CONFLICT = cfg.conflictName || 'À vérifier';
   $('seedEditor').innerHTML = (cfg.groups||[]).map(g=>seedGroupRow(g, SEED_CONFLICT)).join('');
-  growSeedTextareas();
+  growSeedTextareas(); pinIncomeLast();
 }
 function readSeedEditor(){
   const groups = []; let conflictName = '';
@@ -142,12 +145,57 @@ function readSeedEditor(){
 }
 $('seedEditor').addEventListener('click', e=>{
   const t = e.target;
+  if(t.classList.contains('gcaret')){ const g=t.closest('.grp'); g.classList.toggle('collapsed'); t.textContent = g.classList.contains('collapsed') ? '▸' : '▾'; return; }
   if(t.classList.contains('catDel')){ e.preventDefault(); t.closest('.cat').remove(); }
   else if(t.classList.contains('grpDel')){ e.preventDefault(); t.closest('.grp').remove(); }
   else if(t.classList.contains('catAdd')){ e.preventDefault(); t.previousElementSibling.insertAdjacentHTML('beforeend', seedCatRow({name:'',kws:[]}, SEED_CONFLICT)); }
 });
 $('seedEditor').addEventListener('input', e=>{ if(e.target.classList.contains('catKws')) autoGrow(e.target); });
-$('seedAddGroup').onclick = ()=>{ $('seedEditor').insertAdjacentHTML('beforeend', seedGroupRow({name:'',income:false,cats:[{name:'',kws:[]}]}, SEED_CONFLICT)); };
+// Marquer un groupe comme "revenu" le renvoie en bas
+$('seedEditor').addEventListener('change', e=>{ if(e.target.classList.contains('grpInc')) pinIncomeLast(); });
+// Le groupe de revenu reste toujours en bas (ordre relatif des revenus préservé)
+function pinIncomeLast(){
+  const ed = $('seedEditor');
+  [...ed.querySelectorAll(':scope > .grp')].filter(g=>g.querySelector('.grpInc').checked).forEach(g=>ed.appendChild(g));
+}
+// --- Glisser-déposer : réordonner groupes et catégories (catégories déplaçables entre groupes) ---
+let dragEl = null;
+function dragAfter(container, y, selector){
+  let closest = null, closestOffset = -Infinity;
+  container.querySelectorAll(selector).forEach(el=>{
+    if(el===dragEl) return;
+    const box = el.getBoundingClientRect();
+    const offset = y - box.top - box.height/2;
+    if(offset < 0 && offset > closestOffset){ closestOffset = offset; closest = el; }
+  });
+  return closest;
+}
+$('seedEditor').addEventListener('dragstart', e=>{
+  const h = e.target;
+  if(h.classList.contains('ghandle')) dragEl = h.closest('.grp');
+  else if(h.classList.contains('chandle')) dragEl = h.closest('.cat');
+  else return;
+  e.dataTransfer.effectAllowed = 'move';
+  try { e.dataTransfer.setData('text/plain', ''); } catch(_){}
+  setTimeout(()=>{ if(dragEl) dragEl.classList.add('dragging'); }, 0);
+});
+$('seedEditor').addEventListener('dragover', e=>{
+  if(!dragEl) return;
+  e.preventDefault();
+  if(dragEl.classList.contains('grp')){
+    const ed = $('seedEditor');
+    const after = dragAfter(ed, e.clientY, ':scope > .grp');
+    if(after) ed.insertBefore(dragEl, after); else ed.appendChild(dragEl);
+  } else {
+    const grp = e.target.closest('.grp'); if(!grp) return;
+    const cats = grp.querySelector('.cats'); if(!cats) return;
+    const after = dragAfter(cats, e.clientY, '.cat');
+    if(after) cats.insertBefore(dragEl, after); else cats.appendChild(dragEl);
+  }
+});
+$('seedEditor').addEventListener('drop', e=>{ if(dragEl) e.preventDefault(); });
+$('seedEditor').addEventListener('dragend', ()=>{ if(dragEl){ dragEl.classList.remove('dragging'); dragEl=null; pinIncomeLast(); } });
+$('seedAddGroup').onclick = ()=>{ $('seedEditor').insertAdjacentHTML('beforeend', seedGroupRow({name:'',income:false,cats:[{name:'',kws:[]}]}, SEED_CONFLICT)); pinIncomeLast(); };
 $('seedSave').onclick = async ()=>{
   $('seedMsg').textContent='…';
   const cfg = readSeedEditor();
