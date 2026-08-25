@@ -871,14 +871,18 @@ app.post('/api/seed-categories', requireAuth, async (req, res) => {
     const incGroup = (groups || []).find(g => g.is_income);
     let incId = incGroup?.id || null;
     const cats = await api.getCategories();
+    const catByName = new Map(cats.map(c => [norm(c.name), c])); // objets complets (pour connaitre group_id actuel)
     const have = new Set(cats.map(c => norm(c.name)));
     const created = [], existing = [];
-    let renamedGroup = null;
-    for (const g of cfgGroups) {
+    let renamedGroup = null, moved = 0;
+    const gidByIndex = [];
+    // Passe 1 : groupes (creation + ordre) puis creation des categories manquantes.
+    for (let gi = 0; gi < cfgGroups.length; gi++) {
+      const g = cfgGroups[gi];
       let gid;
       if (g.income) {
-        // Groupe de revenu : on cible le groupe "revenu" d'Actual (unique). On francise
-        // le defaut anglais ("Income" -> nom voulu) sans ecraser un nom personnalise.
+        // Groupe de revenu : groupe "revenu" d'Actual (unique). On francise le defaut
+        // anglais ("Income" -> nom voulu) sans ecraser un nom personnalise.
         if (incGroup && norm(incGroup.name) === 'income' && norm(g.group) !== 'income' && !renamedGroup) {
           try { await api.updateCategoryGroup(incGroup.id, { name: g.group }); renamedGroup = g.group; } catch (e) { console.error('[seed-grp]', e?.message || e); }
         }
@@ -888,15 +892,26 @@ app.post('/api/seed-categories', requireAuth, async (req, res) => {
         gid = expenseByName.get(norm(g.group));
         if (!gid) { gid = await api.createCategoryGroup({ name: g.group }); expenseByName.set(norm(g.group), gid); }
       }
+      gidByIndex[gi] = gid;
+      try { await api.updateCategoryGroup(gid, { sort_order: gi }); } catch {} // ordre des groupes (best effort)
       for (const name of g.cats) {
         if (have.has(norm(name))) { existing.push(name); continue; }
-        try { await api.createCategory({ name, group_id: gid, is_income: !!g.income }); created.push(name); have.add(norm(name)); }
+        try { const id = await api.createCategory({ name, group_id: gid, is_income: !!g.income }); created.push(name); have.add(norm(name)); catByName.set(norm(name), { id, group_id: gid, name }); }
         catch (e) { console.error('[seed-cat]', name, e?.message || e); }
+      }
+    }
+    // Passe 2 : deplacer les categories existantes vers leur groupe configure + appliquer l'ordre.
+    for (let gi = 0; gi < cfgGroups.length; gi++) {
+      const g = cfgGroups[gi]; const gid = gidByIndex[gi];
+      for (let ci = 0; ci < g.cats.length; ci++) {
+        const c = catByName.get(norm(g.cats[ci])); if (!c) continue;
+        if (gid && c.group_id && c.group_id !== gid) { try { await api.updateCategory(c.id, { group_id: gid }); c.group_id = gid; moved++; } catch (e) { console.error('[seed-move]', e?.message || e); } }
+        try { await api.updateCategory(c.id, { sort_order: ci }); } catch {} // ordre des categories (best effort)
       }
     }
     const repaired = await repairCategoryMappings(); // les nouvelles categories ont besoin de leur mapping
     await api.sync();
-    res.json({ ok: true, created, existing, repaired, renamedGroup });
+    res.json({ ok: true, created, existing, repaired, renamedGroup, moved });
   } catch (e) { console.error('[erreur]', e?.message || e); res.status(500).json({ ok: false, error: String(e?.message || e) }); }
   finally { busy = false; }
 });
