@@ -389,7 +389,7 @@ const SEED_RULES = [
   // -- Revenus (categories NON creees auto : reliees seulement si elles existent deja) --
   ['SALAIRE','Salaire'],['VIR SALAIRE','Salaire'],
   ['REMBOURSEMENT','Remboursements'],['CPAM','Remboursements'],['AMELI','Remboursements'],
-  ['POLE EMPLOI','Autres revenus'],['FRANCE TRAVAIL','Autres revenus'],['ALLOCATION','Autres revenus'],
+  ['POLE EMPLOI','Autres'],['FRANCE TRAVAIL','Autres'],['ALLOCATION','Autres'],
 ];
 // Regroupe par categorie : { 'Alimentation': ['CARREFOUR', ...], ... } -> 1 regle OR par categorie
 const SEED_BY_CAT = {};
@@ -397,7 +397,7 @@ for (const [kw, cat] of SEED_RULES) { (SEED_BY_CAT[cat] ||= []).push(kw); }
 const SEED_KW = new Set(SEED_RULES.map(([kw]) => kw.toLowerCase().trim()));
 // Structure de budget par defaut : chaque groupe et ses categories (dans l'ordre d'affichage).
 // "Creer les categories" cree les groupes manquants et y range les categories manquantes.
-// Les revenus (Salaire, Remboursements, Autres revenus) ne sont PAS crees ici (reliés si presents).
+// Les revenus (Salaire, Remboursements, Autres) sont crees a part, dans le groupe de type revenu.
 const SEED_GROUPS = [
   { group: 'Dépenses fixes', cats: ['Loyer', 'Crédit', 'Énergie & charges', 'Internet / Téléphone', 'Banque', 'Assurances', 'Mutuelle santé', 'Abonnements'] },
   { group: 'Vie courante', cats: ['Alimentation', 'Transport', 'Essence', 'Santé', 'Divers'] },
@@ -405,7 +405,7 @@ const SEED_GROUPS = [
   { group: 'Autre', cats: [CONFLICT_CATEGORY_NAME] },
 ];
 // Categories de revenus : creees dans le groupe de type "revenu" (existant, sinon cree).
-const SEED_INCOME_GROUP = { group: 'Revenus', cats: ['Salaire', 'Remboursements', 'Autres revenus'] };
+const SEED_INCOME_GROUP = { group: 'Revenus', cats: ['Salaire', 'Remboursements', 'Autres'] };
 
 // ============================ connexion Actual ============================
 let initialized = false, initedWith = null, busy = false, apiInternals = null;
