@@ -414,12 +414,13 @@ function findAccount(accounts, sumName, aliases) {
 // Construit un "matcher" a partir des regles Actual (conditions notes-contains -> set category).
 // Permet d'assigner la categorie DIRECTEMENT a l'import (independant du moteur de regles).
 async function buildCategoryMatcher() {
-  let rules = [];
-  try { rules = await api.getRules(); } catch { return () => null; }
+  let rules = [], cats = [];
+  try { rules = await api.getRules(); cats = await api.getCategories(); } catch { return () => null; }
+  const validIds = new Set(cats.map(c => c.id));
   const matchers = [];
   for (const r of rules) {
     const setCat = (r.actions || []).find(a => a.field === 'category' && a.op === 'set');
-    if (!setCat) continue;
+    if (!setCat || !validIds.has(setCat.value)) continue; // ignore les regles pointant une categorie inexistante
     const notesConds = (r.conditions || []).filter(c => c.field === 'notes' && c.op === 'contains');
     if (!notesConds.length) continue;
     matchers.push({ op: r.conditionsOp || 'and', kws: notesConds.map(c => String(c.value).toLowerCase()), catId: setCat.value });
@@ -678,6 +679,19 @@ app.post('/api/run', requireAuth, upload.array('files'), async (req, res) => {
       }
       const r = await api.importTransactions(acc.id, p.transactions);
       base.added = r.added?.length ?? 0; base.updated = r.updated?.length ?? 0;
+      // Garantit la categorie : on la (re)pose explicitement apres import, par Ref. interne
+      const needCat = p.transactions.filter(t => t.category && t.imported_id);
+      if (needCat.length) {
+        const dates = p.transactions.map(t => t.date).sort();
+        const existing = await api.getTransactions(acc.id, dates[0], dates[dates.length - 1]);
+        const byImp = new Map(existing.filter(e => e.imported_id).map(e => [e.imported_id, e]));
+        let done2 = 0;
+        for (const t of needCat) {
+          const ex = byImp.get(t.imported_id);
+          if (ex && !ex.category) { try { await api.updateTransaction(ex.id, { category: t.category }); done2++; } catch {} }
+        }
+        base.categorized = done2 || base.categorized;
+      }
       results.push(base);
     }
     if (!dryRun) await api.sync();
