@@ -210,7 +210,7 @@ function render(d){
       : d.dryRun
       ? `<span class="tag-ok">→ ${esc(x.mapped)}</span>${x.categorized?` · <b>${x.categorized} catégorisée(s)</b>`:''}<div class="mini">${(x.sample||[]).map(esc).join('<br>')}</div>`
       : `<span class="tag-ok">+${x.added} ajoutée(s)</span>${x.deleted?` · ${x.deleted} suppr.`:''}${x.updated?` · ${x.updated} maj`:''}${x.categorized?` · ${x.categorized} catégorisée(s)`:''} <span class="mini">→ ${esc(x.mapped)}</span>`;
-    if(x.dbg) result += `<div class="mini">🔎 règles notes:${x.dbg.matchers}/${x.dbg.rules} · catégories:${x.dbg.cats} · taggées:${x.dbg.tagged} · à poser:${x.dbg.need??'-'} · retrouvées:${x.dbg.found??'-'} · MAJ:${x.dbg.updated??'-'}${x.dbg.err?' · ERREUR: '+esc(x.dbg.err):''}</div>`;
+    if(x.dbg) result += `<div class="mini">🔎 règles:${x.dbg.matchers}/${x.dbg.rules} · cats:${x.dbg.cats} · taggées:${x.dbg.tagged} · catAssignée:${x.dbg.assignedCat??'-'} · catAprèsImport:${x.dbg.postCat??'-'} · retrouvées:${x.dbg.found??'-'} · MAJ:${x.dbg.updated??'-'}${x.dbg.err?' · ERR: '+esc(x.dbg.err):''}</div>`;
     h += `<tr><td>${esc(x.file)}</td><td>${esc(x.account)}</td><td>${x.count}</td><td>${result}</td></tr>`;
   }
   $('resTable').innerHTML = h;

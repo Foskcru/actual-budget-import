@@ -669,8 +669,8 @@ app.post('/api/run', requireAuth, upload.array('files'), async (req, res) => {
       if (!acc) { results.push({ file: p.file, account: p.account, count: p.transactions.length, matched: false, balance: p.balance ?? null, last4: p.account ? String(p.account).slice(-4) : null }); continue; }
       if (!p.transactions.length) { results.push({ file: p.file, account: p.account, mapped: acc.name, count: 0, matched: true, empty: true }); continue; }
       // Assigne la categorie directement (independant du moteur de regles d'Actual)
-      let categorized = 0;
-      for (const t of p.transactions) { if (!t.category) { const c = matchCat(t.notes); if (c) { t.category = c; categorized++; } } }
+      let categorized = 0, assignedCat = null;
+      for (const t of p.transactions) { if (!t.category) { const c = matchCat(t.notes); if (c) { t.category = c; if (!assignedCat) assignedCat = c; categorized++; } } }
       const base = { file: p.file, account: p.account, mapped: acc.name, count: p.transactions.length, matched: true, categorized,
         dbg: { matchers: matchCat.count, rules: matchCat.rulesTotal, cats: matchCat.catsTotal, tagged: categorized },
         sample: p.transactions.slice(0, 3).map(t => `${t.date}  ${(t.amount / 100).toFixed(2)}€  ${t.payee_name || '(sans bénéficiaire)'}`) };
@@ -686,11 +686,12 @@ app.post('/api/run', requireAuth, upload.array('files'), async (req, res) => {
       base.added = r.added?.length ?? 0; base.updated = r.updated?.length ?? 0;
       // Garantit la categorie : on la (re)pose explicitement apres import, par Ref. interne
       const needCat = p.transactions.filter(t => t.category && t.imported_id);
-      let found = 0, updated2 = 0, err = null;
+      let found = 0, updated2 = 0, err = null, postCat = null;
       if (needCat.length) {
         const dates = p.transactions.map(t => t.date).sort();
         const existing = await api.getTransactions(acc.id, dates[0], dates[dates.length - 1]);
         const byImp = new Map(existing.filter(e => e.imported_id).map(e => [e.imported_id, e]));
+        const ex0 = byImp.get(needCat[0].imported_id); postCat = ex0 ? (ex0.category ?? 'null') : 'introuvable';
         for (const t of needCat) {
           const ex = byImp.get(t.imported_id);
           if (!ex) continue;
@@ -702,7 +703,7 @@ app.post('/api/run', requireAuth, upload.array('files'), async (req, res) => {
           } catch (e) { if (!err) err = 'THROW:' + String(e?.message || e); }
         }
       }
-      base.dbg = { ...base.dbg, need: needCat.length, found, updated: updated2, err };
+      base.dbg = { ...base.dbg, assignedCat: assignedCat ? String(assignedCat).slice(0, 8) : null, postCat: postCat ? String(postCat).slice(0, 12) : null, need: needCat.length, found, updated: updated2, err };
       results.push(base);
     }
     if (!dryRun) await api.sync();
