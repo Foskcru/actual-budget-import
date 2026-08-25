@@ -165,8 +165,8 @@ $('btnRules').onclick = async () => {
     const r = await fetch('/api/seed-rules', { method:'POST' });
     const d = await r.json();
     if(!d.ok) throw new Error(d.error);
-    let msg = `<span class="tag-ok">${d.created} règle(s) créée(s)</span>`;
-    if(d.skipped) msg += ` · ${d.skipped} déjà présente(s)`;
+    let msg = `<span class="tag-ok">${d.created} règle(s) créée(s)</span> (1 par catégorie, conditions en « OU »)`;
+    if(d.removed) msg += ` · ${d.removed} ancienne(s) remplacée(s)`;
     if(d.missingCategories?.length) msg += `<br><span class="tag-skip">Catégories introuvables (ignorées) : ${d.missingCategories.map(esc).join(', ')}</span>`;
     if(d.done?.length) msg += `<br>${d.done.map(esc).join(' · ')}`;
     $('rulesRes').innerHTML = msg;

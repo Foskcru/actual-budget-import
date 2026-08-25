@@ -371,6 +371,10 @@ const SEED_RULES = [
   ['SNCF', 'Transport'], ['TOTAL', 'Transport'], ['ESSO', 'Transport'], ['CARBURANT', 'Transport'], ['UBER ', 'Transport'],
   ['PHARMACIE', 'Santé'],
 ];
+// Regroupe par categorie : { 'Alimentation': ['CARREFOUR', ...], ... } -> 1 regle OR par categorie
+const SEED_BY_CAT = {};
+for (const [kw, cat] of SEED_RULES) { (SEED_BY_CAT[cat] ||= []).push(kw); }
+const SEED_KW = new Set(SEED_RULES.map(([kw]) => kw.toLowerCase().trim()));
 
 // ============================ connexion Actual ============================
 let initialized = false, initedWith = null, busy = false;
@@ -664,18 +668,29 @@ app.post('/api/seed-rules', requireAuth, async (req, res) => {
     const cats = await api.getCategories();
     const catByName = new Map(cats.map(c => [norm(c.name), c.id]));
     const rules = await api.getRules();
-    const existing = new Set();
-    for (const r of rules) for (const c of (r.conditions || [])) if (c.field === 'notes' && c.op === 'contains') existing.add(String(c.value).toLowerCase());
-    let created = 0, skipped = 0; const missing = new Set(); const done = [];
-    for (const [kw, catName] of SEED_RULES) {
+    // Supprime nos anciennes regles de categorisation (100% notes-contains sur nos mots-cles -> set category)
+    let removed = 0;
+    for (const r of rules) {
+      const conds = r.conditions || [];
+      const isSeed = conds.length > 0
+        && conds.every(c => c.field === 'notes' && c.op === 'contains' && SEED_KW.has(String(c.value).toLowerCase().trim()))
+        && (r.actions || []).some(a => a.field === 'category' && a.op === 'set');
+      if (isSeed) { try { await api.deleteRule(r.id); removed++; } catch {} }
+    }
+    // Cree UNE regle par categorie, avec toutes ses conditions en "OU"
+    let created = 0; const missing = new Set(); const done = [];
+    for (const [catName, kws] of Object.entries(SEED_BY_CAT)) {
       const catId = catByName.get(norm(catName));
       if (!catId) { missing.add(catName); continue; }
-      if (existing.has(kw.toLowerCase().trim())) { skipped++; continue; }
-      await api.createRule({ stage: 'pre', conditionsOp: 'and', conditions: [{ field: 'notes', op: 'contains', value: kw }], actions: [{ field: 'category', op: 'set', value: catId }] });
-      created++; done.push(`${kw.trim()} → ${catName}`);
+      await api.createRule({
+        stage: 'pre', conditionsOp: 'or',
+        conditions: kws.map(k => ({ field: 'notes', op: 'contains', value: k })),
+        actions: [{ field: 'category', op: 'set', value: catId }],
+      });
+      created++; done.push(`${catName} (${kws.length} mots-clés)`);
     }
     await api.sync();
-    res.json({ ok: true, created, skipped, missingCategories: [...missing], done });
+    res.json({ ok: true, created, removed, missingCategories: [...missing], done });
   } catch (e) { console.error('[erreur]', e?.message || e); res.status(500).json({ ok: false, error: String(e?.message || e) }); }
   finally { busy = false; }
 });
