@@ -8,7 +8,8 @@
   :root{--bg:#0f1420;--card:#171d2b;--ink:#e7eaf0;--muted:#97a0b3;--line:#262e3f;
         --accent:#4f7cff;--ok:#2fbf71;--warn:#e0a100;--err:#d1495b;--soft:#1b2440;}
   *{box-sizing:border-box}
-  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;padding:24px}
+  html{background:var(--bg)}
+  body{margin:0;min-height:100vh;background:var(--bg);color:var(--ink);font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;padding:24px}
   .wrap{max-width:900px;margin:0 auto}
   h1{font-size:22px;margin:0 0 4px}
   .sub{color:var(--muted);margin:0 0 20px;font-size:13px}
@@ -36,7 +37,13 @@
   .topbar{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:20px}
   .userbar{display:flex;gap:8px;align-items:center;flex-shrink:0}
   .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-  @media(max-width:640px){.grid2{grid-template-columns:1fr}}
+  @media(max-width:640px){
+    .grid2{grid-template-columns:1fr}
+    body{padding:14px}
+    h1{font-size:19px}
+    .topbar{flex-direction:column;gap:10px}
+    .userbar{width:100%;justify-content:flex-start;flex-wrap:wrap}
+  }
   input[type=text],input[type=password],.grid2 input{width:100%;padding:9px 11px;border-radius:8px;border:1px solid var(--line);background:var(--soft);color:var(--ink);font-size:14px}
   a.del{color:var(--err);text-decoration:none;margin-left:6px}
   select{padding:9px 11px;border-radius:8px;border:1px solid var(--line);background:var(--soft);color:var(--ink);font-size:14px}
@@ -57,7 +64,7 @@
   <div class="topbar">
     <div>
       <h1>Import données → Actual Budget</h1>
-      <p class="sub" style="margin-bottom:0">Dépose tes relevés Sumeria (CSV) ou BNP (OFX). Chaque fichier part dans le bon compte, sans doublon.</p>
+      <p class="sub" style="margin-bottom:0">Dépose tes relevés Sumeria (CSV), BNP (OFX) ou SG (QIF). Chaque fichier part dans le bon compte, sans doublon.</p>
     </div>
     <div class="userbar">
       <span id="who" class="mini"></span>

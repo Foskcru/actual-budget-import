@@ -15,6 +15,8 @@ services:
       # --- Alertes ntfy quand un compte se bloque (8 echecs) : optionnel ---
       # NTFY_URL: "https://ntfy.mon-nas/actual-alertes"   # URL complete du topic ntfy
       # NTFY_TOKEN: "tk_xxx"                               # jeton si le topic est protege (sinon laisser vide)
+      # --- Secours : si l'unique admin se verrouille, decommente, redeploie, puis re-commente ---
+      # RESET_LOCKS: "true"                                # efface tous les blocages au demarrage
       # --- Config Actual : OPTIONNELLE (pre-remplit le 1er admin ; ensuite tout se fait dans l'UI) ---
       # ACTUAL_SERVER_URL: "https://ADRESSE-DE-TON-ACTUAL"
       # ACTUAL_PASSWORD:   "MOT_DE_PASSE_DU_SERVEUR_ACTUAL"

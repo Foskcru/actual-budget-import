@@ -73,6 +73,11 @@ db.exec(`
 `);
 // Colonne "disabled" (compte desactive par un admin) : ajout si absente
 try { db.exec('ALTER TABLE users ADD COLUMN disabled INTEGER DEFAULT 0'); } catch {}
+// Soupape de secours : RESET_LOCKS=true efface tous les blocages au demarrage
+// (utile si l'unique admin se verrouille lui-meme). A retirer apres usage.
+if (/^(1|true|yes)$/i.test((process.env.RESET_LOCKS || '').trim().replace(/^["']|["']$/g, ''))) {
+  try { db.exec('DELETE FROM login_locks'); console.warn('[secu] RESET_LOCKS actif : tous les blocages de connexion ont ete effaces.'); } catch {}
+}
 // Reglages PAR UTILISATEUR : chacun a sa propre config Actual (budget isole).
 const getSetting = (uid, k, def = '') => { const r = db.prepare('SELECT value FROM user_settings WHERE user_id=? AND key=?').get(uid, k); return r ? r.value : def; };
 const setSetting = (uid, k, v) => db.prepare('INSERT INTO user_settings(user_id,key,value) VALUES(?,?,?) ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value').run(uid, k, String(v ?? ''));
