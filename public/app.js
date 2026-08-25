@@ -30,6 +30,7 @@ $('btnLogout').onclick = async () => { await fetch('/api/logout',{method:'POST'}
 function showTab(name){
   document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active', t.dataset.tab===name));
   document.querySelectorAll('.tabpane').forEach(p=>p.style.display = p.dataset.pane===name ? '' : 'none');
+  if(name==='rules') growSeedTextareas(); // les textarea rendues cachées ont besoin d'être redimensionnées
 }
 document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>showTab(t.dataset.tab));
 $('btnSettings').onclick = () => { $('modalOverlay').style.display='flex'; showTab('conn'); loadSettings(); };
@@ -97,18 +98,18 @@ function seedCatRow(c, conflictName){
   const isConf = norm2(c.name) === norm2(conflictName);
   return `<div class="cat" style="margin:6px 0;padding:6px 0;border-top:1px solid var(--line)">
       <div class="row" style="gap:8px">
-        <input class="catName" value="${esc(c.name||'')}" placeholder="catégorie" style="flex:1;max-width:220px">
+        <input type="text" class="catName" value="${esc(c.name||'')}" placeholder="catégorie" style="flex:1;max-width:220px">
         <label class="chk" title="Catégorie garde-fou (libellés ambigus)"><input type="radio" name="seedConflict" class="catConf" ${isConf?'checked':''}> garde-fou</label>
         <a href="#" class="del catDel" title="Supprimer la catégorie">✕</a>
       </div>
-      <input class="catKws" value="${esc((c.kws||[]).join(', '))}" placeholder="mots-clés séparés par des virgules" style="width:100%;margin-top:4px">
+      <textarea class="catKws" rows="2" placeholder="mots-clés séparés par des virgules" style="width:100%;margin-top:4px;min-height:36px;overflow:hidden">${esc((c.kws||[]).join(', '))}</textarea>
     </div>`;
 }
 function seedGroupRow(g, conflictName){
   const cats = (g.cats||[]).map(c=>seedCatRow(c, conflictName)).join('');
   return `<div class="grp" style="border:1px solid var(--line);border-radius:10px;padding:10px;margin-bottom:10px">
       <div class="row" style="gap:8px">
-        <input class="grpName" value="${esc(g.name||'')}" placeholder="nom du groupe" style="flex:1;font-weight:600">
+        <input type="text" class="grpName" value="${esc(g.name||'')}" placeholder="nom du groupe" style="flex:1;font-weight:600">
         <label class="chk" title="Groupe de revenus"><input type="checkbox" class="grpInc" ${g.income?'checked':''}> revenu</label>
         <a href="#" class="del grpDel" title="Supprimer le groupe">✕ groupe</a>
       </div>
@@ -116,9 +117,12 @@ function seedGroupRow(g, conflictName){
       <button class="ghost catAdd" style="margin-top:6px">+ catégorie</button>
     </div>`;
 }
+function autoGrow(el){ if(!el) return; el.style.height='auto'; el.style.height=(el.scrollHeight)+'px'; }
+function growSeedTextareas(){ document.querySelectorAll('#seedEditor .catKws').forEach(autoGrow); }
 function renderSeedEditor(cfg){
   SEED_CONFLICT = cfg.conflictName || 'À vérifier';
   $('seedEditor').innerHTML = (cfg.groups||[]).map(g=>seedGroupRow(g, SEED_CONFLICT)).join('');
+  growSeedTextareas();
 }
 function readSeedEditor(){
   const groups = []; let conflictName = '';
@@ -142,6 +146,7 @@ $('seedEditor').addEventListener('click', e=>{
   else if(t.classList.contains('grpDel')){ e.preventDefault(); t.closest('.grp').remove(); }
   else if(t.classList.contains('catAdd')){ e.preventDefault(); t.previousElementSibling.insertAdjacentHTML('beforeend', seedCatRow({name:'',kws:[]}, SEED_CONFLICT)); }
 });
+$('seedEditor').addEventListener('input', e=>{ if(e.target.classList.contains('catKws')) autoGrow(e.target); });
 $('seedAddGroup').onclick = ()=>{ $('seedEditor').insertAdjacentHTML('beforeend', seedGroupRow({name:'',income:false,cats:[{name:'',kws:[]}]}, SEED_CONFLICT)); };
 $('seedSave').onclick = async ()=>{
   $('seedMsg').textContent='…';
