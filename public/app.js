@@ -6,7 +6,7 @@ drop.onclick = () => input.click();
 input.onchange = () => { files = [...input.files]; renderFiles(); };
 ['dragover','dragenter'].forEach(e=>drop.addEventListener(e,ev=>{ev.preventDefault();drop.classList.add('hover')}));
 ['dragleave','drop'].forEach(e=>drop.addEventListener(e,ev=>{ev.preventDefault();drop.classList.remove('hover')}));
-drop.addEventListener('drop', ev => { files = [...ev.dataTransfer.files].filter(f=>/\.(csv|ofx)$/i.test(f.name)); renderFiles(); });
+drop.addEventListener('drop', ev => { files = [...ev.dataTransfer.files].filter(f=>/\.(csv|ofx|qif)$/i.test(f.name)); renderFiles(); });
 
 function renderFiles(){
   $('fileList').textContent = files.length ? `${files.length} fichier(s) : ` + files.map(f=>f.name).join(', ') : '';

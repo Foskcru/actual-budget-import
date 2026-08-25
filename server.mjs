@@ -324,6 +324,36 @@ function parseOFX(text) {
   return { account, balance, transactions };
 }
 
+// ---- QIF (Societe Generale et autres) ----
+function extractPayeeSG(N, P, M) {
+  const m = String(M || ''); let mm;
+  if ((mm = m.match(/CARTE\s+\S+\s+\d{2}\/\d{2}\s+(.+?)\s+\d{6,}\w*\s*$/i))) return mm[1].replace(/\s+/g, ' ').trim();
+  const cleaned = m.replace(/\s+\d{6,}\w*\s*$/, '').trim();
+  return cleaned || String(P || '').trim() || String(N || '').trim() || null;
+}
+function parseQIF(text) {
+  const norm = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const transactions = [];
+  for (const blk of norm.split(/\n\^/)) {
+    let date = null, amount = null, N = '', P = '', M = '';
+    for (const ln of blk.split('\n')) {
+      const s = ln.trim(); if (!s || s[0] === '!') continue;
+      const t = s[0], v = s.slice(1);
+      if (t === 'D') date = v; else if (t === 'T') amount = v;
+      else if (t === 'N') N = v; else if (t === 'P') P = v; else if (t === 'M') M = v;
+    }
+    if (!date || amount == null) continue;
+    const iso = toISO(date, null); if (!iso) continue;
+    const cents = toCents(amount); if (cents == null) continue;
+    const payee = extractPayeeSG(N, P, M);
+    const imported_id = 'sg-' + crypto.createHash('sha1').update(iso + '|' + cents + '|' + (M || P || '')).digest('hex').slice(0, 20);
+    const tx = { date: iso, amount: cents, notes: (M || P) || null, imported_id, cleared: true };
+    if (payee) tx.payee_name = payee;
+    transactions.push(tx);
+  }
+  return { transactions };
+}
+
 // Regles de demarrage : [mot-cle dans les Notes, nom de categorie]
 const SEED_RULES = [
   ['CARREFOUR', 'Alimentation'], ['MONOPRIX', 'Alimentation'], ['FRANPRIX', 'Alimentation'],
@@ -582,11 +612,12 @@ app.post('/api/run', requireAuth, upload.array('files'), async (req, res) => {
       const text = f.buffer.toString('utf8');
       let p, kind;
       if (/<OFX>|<STMTTRN>/i.test(text)) { p = parseOFX(text); kind = 'OFX'; }
+      else if (/^\s*!type:/i.test(text)) { p = parseQIF(text); p.account = fname.replace(/\.[^.]*$/, ''); kind = 'QIF'; }
       else if (/Nom du compte,/i.test(text)) { p = parseSumeria(text); kind = 'Sumeria'; }
-      else { parsed.push({ file: fname, skipped: 'format non reconnu (ni CSV Sumeria ni OFX)' }); continue; }
+      else { parsed.push({ file: fname, skipped: 'format non reconnu (ni CSV Sumeria, ni OFX, ni QIF)' }); continue; }
       if (!p.account) { parsed.push({ file: fname, skipped: kind === 'OFX' ? 'compte OFX introuvable (ACCTID)' : 'compte introuvable (ligne 2)' }); continue; }
-      // Sumeria a 0 op = ignore ; OFX a 0 op = on garde pour permettre la creation/mapping du compte
-      if (!p.transactions.length && kind !== 'OFX') { parsed.push({ file: fname, skipped: '0 operation' }); continue; }
+      // Sumeria a 0 op = ignore ; OFX/QIF a 0 op = on garde pour permettre la creation/mapping du compte
+      if (!p.transactions.length && kind === 'Sumeria') { parsed.push({ file: fname, skipped: '0 operation' }); continue; }
       parsed.push({ file: fname, account: p.account, balance: p.balance ?? null, transactions: p.transactions });
     }
     if (!parsed.some(p => p.account)) { busy = false; return res.json({ ok: true, dryRun, results: parsed.map(p => ({ file: p.file, skipped: p.skipped })) }); }
