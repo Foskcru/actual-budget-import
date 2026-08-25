@@ -128,7 +128,12 @@
 
         <div class="tabpane" data-pane="rules" style="display:none">
           <b>Catégories &amp; règles de départ</b>
-          <div class="mini" style="margin:2px 0 10px">Ta config personnelle : les groupes, catégories et mots-clés utilisés par les boutons « Créer les catégories / règles ». Un libellé qui matche <b>plusieurs</b> catégories part dans la catégorie <b>garde-fou</b> (bouton radio « garde-fou »), qui doit rester à 0.</div>
+          <div class="mini" style="margin:2px 0 10px">
+            Ta liste personnelle de catégories (rangées en groupes) et, pour chacune, des <b>mots-clés</b>.<br>
+            À l'import, si le libellé d'une opération contient un mot-clé, l'opération est classée dans cette catégorie (ex. « CARREFOUR » → <i>Alimentation</i>). Les boutons <b>« Créer les catégories / règles »</b> (page d'accueil) appliquent cette liste à ton budget Actual.<br>
+            <b>Garde-fou</b> : si un libellé contient des mots-clés de <b>plusieurs</b> catégories à la fois, l'app ne peut pas choisir → elle range l'opération dans la catégorie que tu coches « garde-fou », pour que tu vérifies. Si cette catégorie reste <b>vide (à 0)</b>, tout va bien ; si elle se remplit, c'est qu'un mot-clé est trop vague.
+          </div>
+          <div class="row" style="gap:8px;margin-bottom:8px"><button class="ghost" id="seedToggleAll">Tout replier</button></div>
           <div id="seedEditor"></div>
           <div class="row" style="gap:8px;margin-top:8px">
             <button class="ghost" id="seedAddGroup">+ groupe</button>

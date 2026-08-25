@@ -196,6 +196,12 @@ $('seedEditor').addEventListener('dragover', e=>{
 $('seedEditor').addEventListener('drop', e=>{ if(dragEl) e.preventDefault(); });
 $('seedEditor').addEventListener('dragend', ()=>{ if(dragEl){ dragEl.classList.remove('dragging'); dragEl=null; pinIncomeLast(); } });
 $('seedAddGroup').onclick = ()=>{ $('seedEditor').insertAdjacentHTML('beforeend', seedGroupRow({name:'',income:false,cats:[{name:'',kws:[]}]}, SEED_CONFLICT)); pinIncomeLast(); };
+$('seedToggleAll').onclick = ()=>{
+  const grps = [...document.querySelectorAll('#seedEditor .grp')];
+  const anyOpen = grps.some(g=>!g.classList.contains('collapsed')); // s'il en reste d'ouverts -> tout replier
+  grps.forEach(g=>{ g.classList.toggle('collapsed', anyOpen); const car=g.querySelector('.gcaret'); if(car) car.textContent = anyOpen ? '▸' : '▾'; });
+  $('seedToggleAll').textContent = anyOpen ? 'Tout déplier' : 'Tout replier';
+};
 $('seedSave').onclick = async ()=>{
   $('seedMsg').textContent='…';
   const cfg = readSeedEditor();
