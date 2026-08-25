@@ -411,6 +411,28 @@ function findAccount(accounts, sumName, aliases) {
   const key = accountKey(sumName);
   return accounts.find(a => { const k = accountKey(a.name); return k === key || k === key + 's' || k + 's' === key; });
 }
+// Construit un "matcher" a partir des regles Actual (conditions notes-contains -> set category).
+// Permet d'assigner la categorie DIRECTEMENT a l'import (independant du moteur de regles).
+async function buildCategoryMatcher() {
+  let rules = [];
+  try { rules = await api.getRules(); } catch { return () => null; }
+  const matchers = [];
+  for (const r of rules) {
+    const setCat = (r.actions || []).find(a => a.field === 'category' && a.op === 'set');
+    if (!setCat) continue;
+    const notesConds = (r.conditions || []).filter(c => c.field === 'notes' && c.op === 'contains');
+    if (!notesConds.length) continue;
+    matchers.push({ op: r.conditionsOp || 'and', kws: notesConds.map(c => String(c.value).toLowerCase()), catId: setCat.value });
+  }
+  return (notes) => {
+    const n = String(notes || '').toLowerCase();
+    for (const m of matchers) {
+      const hit = m.op === 'and' ? m.kws.every(k => n.includes(k)) : m.kws.some(k => n.includes(k));
+      if (hit) return m.catId;
+    }
+    return null;
+  };
+}
 
 // ============================ serveur web ============================
 const app = express();
@@ -634,13 +656,17 @@ app.post('/api/run', requireAuth, upload.array('files'), async (req, res) => {
     await openBudget(req.user.userId);
     const accounts = await api.getAccounts();
     const aliases = cfg(req.user.userId).aliases;
+    const matchCat = await buildCategoryMatcher(); // categorisation directe via les regles
     const results = [];
     for (const p of parsed) {
       if (!p.transactions) { results.push({ file: p.file, skipped: p.skipped }); continue; }
       const acc = findAccount(accounts, p.account, aliases);
       if (!acc) { results.push({ file: p.file, account: p.account, count: p.transactions.length, matched: false, balance: p.balance ?? null, last4: p.account ? String(p.account).slice(-4) : null }); continue; }
       if (!p.transactions.length) { results.push({ file: p.file, account: p.account, mapped: acc.name, count: 0, matched: true, empty: true }); continue; }
-      const base = { file: p.file, account: p.account, mapped: acc.name, count: p.transactions.length, matched: true,
+      // Assigne la categorie directement (independant du moteur de regles d'Actual)
+      let categorized = 0;
+      for (const t of p.transactions) { if (!t.category) { const c = matchCat(t.notes); if (c) { t.category = c; categorized++; } } }
+      const base = { file: p.file, account: p.account, mapped: acc.name, count: p.transactions.length, matched: true, categorized,
         sample: p.transactions.slice(0, 3).map(t => `${t.date}  ${(t.amount / 100).toFixed(2)}€  ${t.payee_name || '(sans bénéficiaire)'}`) };
       if (dryRun) { results.push(base); continue; }
       if (replaceExisting) {

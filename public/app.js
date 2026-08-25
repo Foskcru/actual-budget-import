@@ -208,8 +208,8 @@ function render(d){
     let result = x.empty
       ? `<span class="tag-ok">→ ${esc(x.mapped)}</span> <span class="mini">· compte connecté, aucune opération</span>`
       : d.dryRun
-      ? `<span class="tag-ok">→ ${esc(x.mapped)}</span><div class="mini">${(x.sample||[]).map(esc).join('<br>')}</div>`
-      : `<span class="tag-ok">+${x.added} ajoutée(s)</span>${x.deleted?` · ${x.deleted} suppr.`:''}${x.updated?` · ${x.updated} maj`:''} <span class="mini">→ ${esc(x.mapped)}</span>`;
+      ? `<span class="tag-ok">→ ${esc(x.mapped)}</span>${x.categorized?` · <b>${x.categorized} catégorisée(s)</b>`:''}<div class="mini">${(x.sample||[]).map(esc).join('<br>')}</div>`
+      : `<span class="tag-ok">+${x.added} ajoutée(s)</span>${x.deleted?` · ${x.deleted} suppr.`:''}${x.updated?` · ${x.updated} maj`:''}${x.categorized?` · ${x.categorized} catégorisée(s)`:''} <span class="mini">→ ${esc(x.mapped)}</span>`;
     h += `<tr><td>${esc(x.file)}</td><td>${esc(x.account)}</td><td>${x.count}</td><td>${result}</td></tr>`;
   }
   $('resTable').innerHTML = h;
