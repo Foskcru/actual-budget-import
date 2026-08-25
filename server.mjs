@@ -436,6 +436,7 @@ async function buildCategoryMatcher() {
   fn.count = matchers.length;
   fn.rulesTotal = rules.length;
   fn.catsTotal = cats.length;
+  fn.catById = new Map(cats.map(c => [c.id, c]));
   return fn;
 }
 
@@ -703,7 +704,11 @@ app.post('/api/run', requireAuth, upload.array('files'), async (req, res) => {
           } catch (e) { if (!err) err = 'THROW:' + String(e?.message || e); }
         }
       }
-      base.dbg = { ...base.dbg, assignedCat: assignedCat ? String(assignedCat).slice(0, 8) : null, postCat: postCat ? String(postCat).slice(0, 12) : null, need: needCat.length, found, updated: updated2, err };
+      let catInfo = null;
+      if (assignedCat) { const c = matchCat.catById?.get(assignedCat); if (c) catInfo = `${c.name}|inc:${c.is_income ? 1 : 0}|hid:${c.hidden ? 1 : 0}|grp:${String(c.group_id || '').slice(0, 6)}`; else catInfo = 'PAS dans catById'; }
+      // re-fetch pour voir si l'ID est TOUJOURS valide au moment de l'import
+      let stillValid = null; try { const fresh = await api.getCategories(); stillValid = assignedCat ? fresh.some(c => c.id === assignedCat) : null; } catch {}
+      base.dbg = { ...base.dbg, assignedCat: assignedCat ? String(assignedCat).slice(0, 8) : null, catInfo, stillValid, postCat: postCat ? String(postCat).slice(0, 12) : null, need: needCat.length, found, updated: updated2, err };
       results.push(base);
     }
     if (!dryRun) await api.sync();
