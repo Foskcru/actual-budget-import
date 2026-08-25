@@ -83,6 +83,7 @@
       <div class="tabs">
         <button class="tab active" data-tab="conn">Connexion</button>
         <button class="tab" data-tab="accts">Comptes</button>
+        <button class="tab" data-tab="rules">Règles</button>
         <button class="tab" data-tab="pwd">Mon compte</button>
         <button class="tab" id="tabAdmin" data-tab="admin" style="display:none">Admin</button>
       </div>
@@ -118,6 +119,20 @@
               </div>
             </div>
             <div class="row" style="margin-top:10px"><button class="ghost" id="a_add">Ajouter la correspondance</button></div>
+          </div>
+        </div>
+
+        <div class="tabpane" data-pane="rules" style="display:none">
+          <b>Catégories &amp; règles de départ</b>
+          <div class="mini" style="margin:2px 0 10px">Ta config personnelle : les groupes, catégories et mots-clés utilisés par les boutons « Créer les catégories / règles ». Un libellé qui matche <b>plusieurs</b> catégories part dans la catégorie <b>garde-fou</b> (bouton radio « garde-fou »), qui doit rester à 0.</div>
+          <div id="seedEditor"></div>
+          <div class="row" style="gap:8px;margin-top:8px">
+            <button class="ghost" id="seedAddGroup">+ groupe</button>
+          </div>
+          <div class="row" style="gap:8px;margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
+            <button id="seedSave">Enregistrer</button>
+            <button class="ghost" id="seedReset">Réinitialiser au modèle par défaut</button>
+            <span id="seedMsg" class="mini"></span>
           </div>
         </div>
 

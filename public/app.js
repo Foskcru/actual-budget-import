@@ -42,7 +42,7 @@ async function loadSettings(){
   $('s_url').value=d.serverURL||''; $('s_sync').value=d.syncId||''; $('s_budget').value=d.budgetName||'';
   $('s_pw').placeholder = d.hasPassword?'(inchangé)':'(vide)'; $('s_e2e').placeholder = d.hasE2e?'(inchangé)':'(vide)';
   try { ALIASES = JSON.parse(d.aliases||'{}'); } catch { ALIASES={}; }
-  renderAliases(); fetchAccounts();
+  renderAliases(); fetchAccounts(); loadSeedConfig();
   if(IS_ADMIN){ loadUsers(); loadLocks(); loadNtfy(); }
 }
 $('s_save').onclick = async () => {
@@ -89,6 +89,81 @@ $('a_add').onclick = () => {
   if(!k||!v){ return; }
   ALIASES[k]=v; $('a_key').value=''; $('a_val').value=''; renderAliases(); saveAliases();
 };
+
+// --- Éditeur des catégories & règles de départ (config par utilisateur) ---
+function norm2(s){ return String(s||'').toLowerCase().trim(); }
+let SEED_CONFLICT = 'À vérifier';
+function seedCatRow(c, conflictName){
+  const isConf = norm2(c.name) === norm2(conflictName);
+  return `<div class="cat" style="margin:6px 0;padding:6px 0;border-top:1px solid var(--line)">
+      <div class="row" style="gap:8px">
+        <input class="catName" value="${esc(c.name||'')}" placeholder="catégorie" style="flex:1;max-width:220px">
+        <label class="chk" title="Catégorie garde-fou (libellés ambigus)"><input type="radio" name="seedConflict" class="catConf" ${isConf?'checked':''}> garde-fou</label>
+        <a href="#" class="del catDel" title="Supprimer la catégorie">✕</a>
+      </div>
+      <input class="catKws" value="${esc((c.kws||[]).join(', '))}" placeholder="mots-clés séparés par des virgules" style="width:100%;margin-top:4px">
+    </div>`;
+}
+function seedGroupRow(g, conflictName){
+  const cats = (g.cats||[]).map(c=>seedCatRow(c, conflictName)).join('');
+  return `<div class="grp" style="border:1px solid var(--line);border-radius:10px;padding:10px;margin-bottom:10px">
+      <div class="row" style="gap:8px">
+        <input class="grpName" value="${esc(g.name||'')}" placeholder="nom du groupe" style="flex:1;font-weight:600">
+        <label class="chk" title="Groupe de revenus"><input type="checkbox" class="grpInc" ${g.income?'checked':''}> revenu</label>
+        <a href="#" class="del grpDel" title="Supprimer le groupe">✕ groupe</a>
+      </div>
+      <div class="cats" style="margin-top:6px">${cats}</div>
+      <button class="ghost catAdd" style="margin-top:6px">+ catégorie</button>
+    </div>`;
+}
+function renderSeedEditor(cfg){
+  SEED_CONFLICT = cfg.conflictName || 'À vérifier';
+  $('seedEditor').innerHTML = (cfg.groups||[]).map(g=>seedGroupRow(g, SEED_CONFLICT)).join('');
+}
+function readSeedEditor(){
+  const groups = []; let conflictName = '';
+  document.querySelectorAll('#seedEditor .grp').forEach(gEl=>{
+    const name = gEl.querySelector('.grpName').value.trim();
+    const income = gEl.querySelector('.grpInc').checked;
+    const cats = [];
+    gEl.querySelectorAll('.cat').forEach(cEl=>{
+      const cname = cEl.querySelector('.catName').value.trim(); if(!cname) return;
+      const kws = cEl.querySelector('.catKws').value.split(',').map(s=>s.trim()).filter(Boolean);
+      if(cEl.querySelector('.catConf').checked) conflictName = cname;
+      cats.push({name:cname, kws});
+    });
+    if(name) groups.push({name, income, cats});
+  });
+  return { groups, conflictName: conflictName || SEED_CONFLICT || 'À vérifier' };
+}
+$('seedEditor').addEventListener('click', e=>{
+  const t = e.target;
+  if(t.classList.contains('catDel')){ e.preventDefault(); t.closest('.cat').remove(); }
+  else if(t.classList.contains('grpDel')){ e.preventDefault(); t.closest('.grp').remove(); }
+  else if(t.classList.contains('catAdd')){ e.preventDefault(); t.previousElementSibling.insertAdjacentHTML('beforeend', seedCatRow({name:'',kws:[]}, SEED_CONFLICT)); }
+});
+$('seedAddGroup').onclick = ()=>{ $('seedEditor').insertAdjacentHTML('beforeend', seedGroupRow({name:'',income:false,cats:[{name:'',kws:[]}]}, SEED_CONFLICT)); };
+$('seedSave').onclick = async ()=>{
+  $('seedMsg').textContent='…';
+  const cfg = readSeedEditor();
+  if(!cfg.groups.length){ $('seedMsg').textContent='Ajoute au moins un groupe avec une catégorie.'; return; }
+  try {
+    const d = await (await fetch('/api/seed-config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)})).json();
+    if(!d.ok) throw new Error(d.error);
+    renderSeedEditor(d.config); $('seedMsg').textContent='Enregistré ✓';
+  } catch(e){ $('seedMsg').textContent='Erreur : '+e.message; }
+};
+$('seedReset').onclick = async ()=>{
+  if(!confirm('Réinitialiser au modèle par défaut ? Tes personnalisations seront perdues.')) return;
+  try {
+    const d = await (await fetch('/api/seed-config/reset',{method:'POST'})).json();
+    if(!d.ok) throw new Error(d.error);
+    renderSeedEditor(d.config); $('seedMsg').textContent='Réinitialisé ✓';
+  } catch(e){ $('seedMsg').textContent='Erreur : '+e.message; }
+};
+async function loadSeedConfig(){
+  try { const d = await (await fetch('/api/seed-config')).json(); if(d.ok) renderSeedEditor(d.config); } catch {}
+}
 async function loadUsers(){
   const d = await (await fetch('/api/users')).json(); if(!d.ok) return;
   $('userList').innerHTML = d.users.map(u=>{

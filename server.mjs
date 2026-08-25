@@ -429,7 +429,6 @@ const SEED_RULES = [
 // Regroupe par categorie : { 'Alimentation': ['CARREFOUR', ...], ... } -> 1 regle OR par categorie
 const SEED_BY_CAT = {};
 for (const [kw, cat] of SEED_RULES) { (SEED_BY_CAT[cat] ||= []).push(kw); }
-const SEED_KW = new Set(SEED_RULES.map(([kw]) => kw.toLowerCase().trim()));
 // Structure de budget par defaut : chaque groupe et ses categories (dans l'ordre d'affichage).
 // "Creer les categories" cree les groupes manquants et y range les categories manquantes.
 // Les revenus (Salaire, Remboursements, Autres) sont crees a part, dans le groupe de type revenu.
@@ -441,6 +440,37 @@ const SEED_GROUPS = [
 ];
 // Categories de revenus : creees dans le groupe de type "revenu" (existant, sinon cree).
 const SEED_INCOME_GROUP = { group: 'Revenus', cats: ['Salaire', 'Remboursements', 'Autres'] };
+
+// ---- Config de categorisation PAR UTILISATEUR (editable dans l'UI) ----
+// Modele : { groups: [ { name, income, cats: [ { name, kws:[...] } ] } ], conflictName }
+// Les constantes ci-dessus servent de MODELE PAR DEFAUT (bouton "Reinitialiser").
+function defaultSeedConfig() {
+  const cat = (name) => ({ name, kws: (SEED_BY_CAT[name] || []).slice() });
+  const groups = SEED_GROUPS.map(g => ({ name: g.group, income: false, cats: g.cats.map(cat) }));
+  groups.push({ name: SEED_INCOME_GROUP.group, income: true, cats: SEED_INCOME_GROUP.cats.map(cat) });
+  return { groups, conflictName: CONFLICT_CATEGORY_NAME };
+}
+function getSeedConfig(uid) {
+  try { const raw = getSetting(uid, 'seedConfig', ''); if (raw) { const c = JSON.parse(raw); if (c && Array.isArray(c.groups)) return c; } } catch {}
+  return defaultSeedConfig();
+}
+// Derive la config en structures pretes a l'emploi pour les endpoints.
+function seedDerived(config) {
+  const conflictName = config.conflictName || CONFLICT_CATEGORY_NAME;
+  const byCatEntries = [], groups = [], allCatNames = [];
+  for (const g of (config.groups || [])) {
+    const gname = String(g.name || '').trim(); if (!gname) continue;
+    const cats = [];
+    for (const c of (g.cats || [])) {
+      const name = String(c.name || '').trim(); if (!name) continue;
+      cats.push(name); allCatNames.push(name);
+      const kws = (c.kws || []).map(k => String(k).trim()).filter(Boolean);
+      if (kws.length && norm(name) !== norm(conflictName)) byCatEntries.push([name, kws]);
+    }
+    groups.push({ group: gname, income: !!g.income, cats });
+  }
+  return { groups, byCatEntries, allCatNames, conflictName };
+}
 
 // ============================ connexion Actual ============================
 let initialized = false, initedWith = null, busy = false, apiInternals = null;
@@ -512,11 +542,11 @@ function findAccount(accounts, sumName, aliases) {
 }
 // Construit un "matcher" a partir des regles Actual (conditions notes-contains -> set category).
 // Permet d'assigner la categorie DIRECTEMENT a l'import (independant du moteur de regles).
-async function buildCategoryMatcher() {
+async function buildCategoryMatcher(conflictName = CONFLICT_CATEGORY_NAME) {
   let rules = [], cats = [];
   try { rules = await api.getRules(); cats = await api.getCategories(); } catch { return () => null; }
   const validIds = new Set(cats.map(c => c.id));
-  const conflictCatId = cats.find(c => norm(c.name) === norm(CONFLICT_CATEGORY_NAME))?.id || null;
+  const conflictCatId = cats.find(c => norm(c.name) === norm(conflictName))?.id || null;
   const matchers = [];
   for (const r of rules) {
     const setCat = (r.actions || []).find(a => a.field === 'category' && a.op === 'set');
@@ -773,7 +803,7 @@ app.post('/api/run', requireAuth, upload.array('files'), async (req, res) => {
     if (repaired || repairedTp) { try { await api.sync(); } catch {} }
     const accounts = await api.getAccounts();
     const aliases = cfg(req.user.userId).aliases;
-    const matchCat = await buildCategoryMatcher(); // categorisation directe via les regles
+    const matchCat = await buildCategoryMatcher(getSeedConfig(req.user.userId).conflictName); // categorisation directe via les regles
     const results = [];
     for (const p of parsed) {
       if (!p.transactions) { results.push({ file: p.file, skipped: p.skipped }); continue; }
@@ -835,34 +865,34 @@ app.post('/api/seed-categories', requireAuth, async (req, res) => {
   busy = true;
   try {
     await openBudget(req.user.userId);
+    const { groups: cfgGroups } = seedDerived(getSeedConfig(req.user.userId));
     const groups = await api.getCategoryGroups();
-    const groupByName = new Map((groups || []).filter(g => !g.is_income).map(g => [norm(g.name), g.id]));
+    const expenseByName = new Map((groups || []).filter(g => !g.is_income).map(g => [norm(g.name), g.id]));
+    const incGroup = (groups || []).find(g => g.is_income);
+    let incId = incGroup?.id || null;
     const cats = await api.getCategories();
     const have = new Set(cats.map(c => norm(c.name)));
     const created = [], existing = [];
-    for (const { group, cats: names } of SEED_GROUPS) {
-      let gid = groupByName.get(norm(group));
-      if (!gid) { gid = await api.createCategoryGroup({ name: group }); groupByName.set(norm(group), gid); }
-      for (const name of names) {
+    let renamedGroup = null;
+    for (const g of cfgGroups) {
+      let gid;
+      if (g.income) {
+        // Groupe de revenu : on cible le groupe "revenu" d'Actual (unique). On francise
+        // le defaut anglais ("Income" -> nom voulu) sans ecraser un nom personnalise.
+        if (incGroup && norm(incGroup.name) === 'income' && norm(g.group) !== 'income' && !renamedGroup) {
+          try { await api.updateCategoryGroup(incGroup.id, { name: g.group }); renamedGroup = g.group; } catch (e) { console.error('[seed-grp]', e?.message || e); }
+        }
+        if (!incId) incId = await api.createCategoryGroup({ name: g.group, is_income: true });
+        gid = incId;
+      } else {
+        gid = expenseByName.get(norm(g.group));
+        if (!gid) { gid = await api.createCategoryGroup({ name: g.group }); expenseByName.set(norm(g.group), gid); }
+      }
+      for (const name of g.cats) {
         if (have.has(norm(name))) { existing.push(name); continue; }
-        try { await api.createCategory({ name, group_id: gid }); created.push(name); have.add(norm(name)); }
+        try { await api.createCategory({ name, group_id: gid, is_income: !!g.income }); created.push(name); have.add(norm(name)); }
         catch (e) { console.error('[seed-cat]', name, e?.message || e); }
       }
-    }
-    // Revenus : dans le groupe de type "revenu". On francise le groupe par defaut d'Actual
-    // ("Income" -> "Revenus") sans jamais ecraser un nom personnalise par l'utilisateur.
-    const incGroup = (groups || []).find(g => g.is_income);
-    let incId = incGroup?.id;
-    let renamedGroup = null;
-    if (incGroup && norm(incGroup.name) === 'income') {
-      try { await api.updateCategoryGroup(incGroup.id, { name: SEED_INCOME_GROUP.group }); renamedGroup = SEED_INCOME_GROUP.group; }
-      catch (e) { console.error('[seed-grp]', e?.message || e); }
-    }
-    if (!incId) incId = await api.createCategoryGroup({ name: SEED_INCOME_GROUP.group, is_income: true });
-    for (const name of SEED_INCOME_GROUP.cats) {
-      if (have.has(norm(name))) { existing.push(name); continue; }
-      try { await api.createCategory({ name, group_id: incId, is_income: true }); created.push(name); have.add(norm(name)); }
-      catch (e) { console.error('[seed-cat]', name, e?.message || e); }
     }
     const repaired = await repairCategoryMappings(); // les nouvelles categories ont besoin de leur mapping
     await api.sync();
@@ -877,21 +907,24 @@ app.post('/api/seed-rules', requireAuth, async (req, res) => {
   try {
     await openBudget(req.user.userId);
     await repairCategoryMappings(); // repare les categories sans mapping
+    const { byCatEntries, allCatNames } = seedDerived(getSeedConfig(req.user.userId));
     const cats = await api.getCategories();
     const catByName = new Map(cats.map(c => [norm(c.name), c.id]));
+    // Categories "gerees" par la config = celles dont on remplace les regles (par ID).
+    const managedIds = new Set(allCatNames.map(n => catByName.get(norm(n))).filter(Boolean));
     const rules = await api.getRules();
-    // Supprime nos anciennes regles de categorisation (100% notes-contains sur nos mots-cles -> set category)
+    // Supprime nos anciennes regles de categorisation : notes-contains uniquement -> set d'une categorie geree.
+    // (par categorie, pas par mot-cle : ainsi retirer un mot-cle et relancer nettoie bien l'ancienne regle.)
     let removed = 0;
     for (const r of rules) {
+      const setCat = (r.actions || []).find(a => a.field === 'category' && a.op === 'set');
       const conds = r.conditions || [];
-      const isSeed = conds.length > 0
-        && conds.every(c => c.field === 'notes' && c.op === 'contains' && SEED_KW.has(String(c.value).toLowerCase().trim()))
-        && (r.actions || []).some(a => a.field === 'category' && a.op === 'set');
-      if (isSeed) { try { await api.deleteRule(r.id); removed++; } catch {} }
+      const notesOnly = conds.length > 0 && conds.every(c => c.field === 'notes' && c.op === 'contains');
+      if (setCat && managedIds.has(setCat.value) && notesOnly) { try { await api.deleteRule(r.id); removed++; } catch {} }
     }
     // Cree UNE regle par categorie, avec toutes ses conditions en "OU"
     let created = 0; const missing = new Set(); const done = [];
-    for (const [catName, kws] of Object.entries(SEED_BY_CAT)) {
+    for (const [catName, kws] of byCatEntries) {
       const catId = catByName.get(norm(catName));
       if (!catId) { missing.add(catName); continue; }
       await api.createRule({
@@ -905,6 +938,35 @@ app.post('/api/seed-rules', requireAuth, async (req, res) => {
     res.json({ ok: true, created, removed, missingCategories: [...missing], done });
   } catch (e) { console.error('[erreur]', e?.message || e); res.status(500).json({ ok: false, error: String(e?.message || e) }); }
   finally { busy = false; }
+});
+
+// --- Config de categorisation PAR UTILISATEUR (lecture / ecriture / reinit) ---
+app.get('/api/seed-config', requireAuth, (req, res) => {
+  res.json({ ok: true, config: getSeedConfig(req.user.userId), default: defaultSeedConfig() });
+});
+app.post('/api/seed-config', requireAuth, (req, res) => {
+  const body = req.body || {};
+  if (!Array.isArray(body.groups)) return res.status(400).json({ ok: false, error: 'Config invalide (groups manquant).' });
+  const groups = [];
+  for (const g of body.groups) {
+    if (!g || typeof g.name !== 'string' || !g.name.trim()) continue;
+    const cats = [];
+    for (const c of (g.cats || [])) {
+      if (!c || typeof c.name !== 'string' || !c.name.trim()) continue;
+      const kws = Array.isArray(c.kws) ? c.kws.map(k => String(k).trim()).filter(Boolean) : [];
+      cats.push({ name: c.name.trim(), kws });
+    }
+    groups.push({ name: g.name.trim(), income: !!g.income, cats });
+  }
+  if (!groups.length) return res.status(400).json({ ok: false, error: 'Au moins un groupe avec une catégorie est requis.' });
+  const conflictName = (typeof body.conflictName === 'string' && body.conflictName.trim()) ? body.conflictName.trim() : CONFLICT_CATEGORY_NAME;
+  const clean = { groups, conflictName };
+  setSetting(req.user.userId, 'seedConfig', JSON.stringify(clean));
+  res.json({ ok: true, config: clean });
+});
+app.post('/api/seed-config/reset', requireAuth, (req, res) => {
+  db.prepare('DELETE FROM user_settings WHERE user_id=? AND key=?').run(req.user.userId, 'seedConfig');
+  res.json({ ok: true, config: defaultSeedConfig() });
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
