@@ -377,15 +377,28 @@ for (const [kw, cat] of SEED_RULES) { (SEED_BY_CAT[cat] ||= []).push(kw); }
 const SEED_KW = new Set(SEED_RULES.map(([kw]) => kw.toLowerCase().trim()));
 
 // ============================ connexion Actual ============================
-let initialized = false, initedWith = null, busy = false;
+let initialized = false, initedWith = null, busy = false, apiInternals = null;
 async function ensureInit(uid) {
   const c = cfg(uid);
   if (!c.serverURL || !c.password) throw new Error("Reglages manquants : renseigne l'URL et le mot de passe du serveur Actual dans tes Parametres.");
   const key = c.serverURL + '|' + c.password;
   if (initialized && initedWith === key) return;
   if (initialized) { try { await api.shutdown(); } catch {} initialized = false; }
-  await api.init({ dataDir: DATA_DIR, serverURL: c.serverURL, password: c.password });
+  apiInternals = await api.init({ dataDir: DATA_DIR, serverURL: c.serverURL, password: c.password });
   initialized = true; initedWith = key;
+}
+// Repare les categories creees sans entree category_mapping (ex. via un import de structure)
+// -> sans ce mapping, aucune transaction ne peut porter la categorie ("Classer").
+async function repairCategoryMappings() {
+  try {
+    if (!apiInternals?.db) return 0;
+    const cats = await api.getCategories();
+    const maps = await apiInternals.db.all('SELECT id FROM category_mapping', []);
+    const mapped = new Set((maps || []).map(m => m.id));
+    let fixed = 0;
+    for (const c of cats) { if (!mapped.has(c.id)) { await apiInternals.db.insert('category_mapping', { id: c.id, transferId: c.id }); fixed++; } }
+    return fixed;
+  } catch (e) { console.error('[repair]', e?.message || e); return 0; }
 }
 async function openBudget(uid) {
   await ensureInit(uid);
@@ -660,6 +673,7 @@ app.post('/api/run', requireAuth, upload.array('files'), async (req, res) => {
     if (!parsed.some(p => p.account)) { busy = false; return res.json({ ok: true, dryRun, results: parsed.map(p => ({ file: p.file, skipped: p.skipped })) }); }
 
     await openBudget(req.user.userId);
+    const repaired = await repairCategoryMappings(); // repare les categories sans mapping
     const accounts = await api.getAccounts();
     const aliases = cfg(req.user.userId).aliases;
     const matchCat = await buildCategoryMatcher(); // categorisation directe via les regles
@@ -712,7 +726,7 @@ app.post('/api/run', requireAuth, upload.array('files'), async (req, res) => {
       results.push(base);
     }
     if (!dryRun) await api.sync();
-    res.json({ ok: true, dryRun, results, accounts: accounts.filter(a => !a.closed).map(a => a.name) });
+    res.json({ ok: true, dryRun, repaired, results, accounts: accounts.filter(a => !a.closed).map(a => a.name) });
   } catch (e) { console.error('[erreur]', e?.message || e); res.status(500).json({ ok: false, error: String(e?.message || e) }); }
   finally { busy = false; }
 });
@@ -722,6 +736,7 @@ app.post('/api/seed-rules', requireAuth, async (req, res) => {
   busy = true;
   try {
     await openBudget(req.user.userId);
+    await repairCategoryMappings(); // repare les categories sans mapping
     const cats = await api.getCategories();
     const catByName = new Map(cats.map(c => [norm(c.name), c.id]));
     const rules = await api.getRules();

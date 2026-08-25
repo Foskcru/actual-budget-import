@@ -179,7 +179,7 @@ function render(d){
   const mode = d.dryRun ? '<span class="pill" style="background:var(--soft);color:var(--muted)">SIMULATION</span>' : '<span class="pill ok">IMPORT RÉEL</span>';
   let add=0, del=0, ko=0;
   d.results.forEach(x=>{ add+=x.added||0; del+=x.deleted||0; if(x.matched===false) ko++; });
-  $('summary').innerHTML = `${mode} &nbsp; ${d.dryRun?'':`<b>${add}</b> ajoutée(s), <b>${del}</b> supprimée(s) &nbsp;`} ${ko?`<span class="tag-no">${ko} compte(s) non trouvé(s)</span>`:''}`;
+  $('summary').innerHTML = `${mode} &nbsp; ${d.dryRun?'':`<b>${add}</b> ajoutée(s), <b>${del}</b> supprimée(s) &nbsp;`}${d.repaired?`<span class="tag-ok">${d.repaired} catégorie(s) réparée(s)</span> &nbsp;`:''}${ko?`<span class="tag-no">${ko} compte(s) non trouvé(s)</span>`:''}`;
   let h = '<tr><th>Fichier</th><th>Compte</th><th>Op.</th><th>Résultat</th></tr>';
   let i = 0;
   for(const x of d.results){
@@ -210,7 +210,6 @@ function render(d){
       : d.dryRun
       ? `<span class="tag-ok">→ ${esc(x.mapped)}</span>${x.categorized?` · <b>${x.categorized} catégorisée(s)</b>`:''}<div class="mini">${(x.sample||[]).map(esc).join('<br>')}</div>`
       : `<span class="tag-ok">+${x.added} ajoutée(s)</span>${x.deleted?` · ${x.deleted} suppr.`:''}${x.updated?` · ${x.updated} maj`:''}${x.categorized?` · ${x.categorized} catégorisée(s)`:''} <span class="mini">→ ${esc(x.mapped)}</span>`;
-    if(x.dbg) result += `<div class="mini">🔎 cat:${esc(x.dbg.catInfo||'-')} · stillValid:${x.dbg.stillValid} · assignée:${x.dbg.assignedCat??'-'} · aprèsImport:${x.dbg.postCat??'-'} · MAJ:${x.dbg.updated??'-'}${x.dbg.err?' · ERR:'+esc(x.dbg.err):''}</div>`;
     h += `<tr><td>${esc(x.file)}</td><td>${esc(x.account)}</td><td>${x.count}</td><td>${result}</td></tr>`;
   }
   $('resTable').innerHTML = h;
