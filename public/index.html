@@ -71,11 +71,11 @@
 
     <hr style="border:0;border-top:1px solid var(--line);margin:18px 0">
     <b>Correspondances de comptes</b>
-    <div class="mini" style="margin:2px 0 8px">Relie un compte du fichier (nom Sumeria, ou n° de compte BNP de l'OFX) à un compte Actual. Enregistré automatiquement.</div>
+    <div class="mini" style="margin:2px 0 8px">Relie un compte du fichier à un compte Actual (enregistré automatiquement). La clé selon la banque : <b>nom du compte</b> (Sumeria CSV), <b>n° ACCTID</b> (BNP OFX), <b>nom du fichier</b> (SG QIF).</div>
     <datalist id="acctList"></datalist>
     <div id="aliasRows"></div>
     <div class="row" style="gap:8px;margin-top:8px">
-      <input type="text" id="a_key" placeholder="ex. 00000310032" style="max-width:180px">
+      <input type="text" id="a_key" placeholder="ex. 00050014183 / Économie" style="max-width:180px">
       <span class="mini">→</span>
       <input type="text" id="a_val" list="acctList" placeholder="compte Actual" style="max-width:180px">
       <button class="ghost" id="a_add">Ajouter</button>
