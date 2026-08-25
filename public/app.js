@@ -22,14 +22,20 @@ let IS_ADMIN = false;
     IS_ADMIN = !!m.isAdmin;
     $('who').textContent = m.username + (m.isAdmin ? ' · admin' : '');
     $('btnSettings').style.display='';           // chacun gère ses propres réglages
-    if(IS_ADMIN) $('usersBlock').style.display='';
+    if(IS_ADMIN) $('tabAdmin').style.display='';
   } catch { location.href='/login.html'; }
 })();
 $('btnLogout').onclick = async () => { await fetch('/api/logout',{method:'POST'}); location.href='/login.html'; };
-$('btnSettings').onclick = () => {
-  const c = $('settingsCard'); const show = c.style.display==='none';
-  c.style.display = show ? '' : 'none'; if(show) loadSettings();
-};
+// --- modale Paramètres + onglets ---
+function showTab(name){
+  document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active', t.dataset.tab===name));
+  document.querySelectorAll('.tabpane').forEach(p=>p.style.display = p.dataset.pane===name ? '' : 'none');
+}
+document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>showTab(t.dataset.tab));
+$('btnSettings').onclick = () => { $('modalOverlay').style.display='flex'; showTab('conn'); loadSettings(); };
+$('modalClose').onclick = () => { $('modalOverlay').style.display='none'; };
+$('modalOverlay').onclick = (e) => { if(e.target===$('modalOverlay')) $('modalOverlay').style.display='none'; };
+document.addEventListener('keydown', e=>{ if(e.key==='Escape') $('modalOverlay').style.display='none'; });
 let ALIASES = {}, ACCOUNTS = [];
 async function loadSettings(){
   const d = await (await fetch('/api/settings')).json(); if(!d.ok) return;

@@ -41,6 +41,15 @@
   a.del{color:var(--err);text-decoration:none;margin-left:6px}
   select{padding:9px 11px;border-radius:8px;border:1px solid var(--line);background:var(--soft);color:var(--ink);font-size:14px}
   textarea{width:100%;padding:9px 11px;border-radius:8px;border:1px solid var(--line);background:var(--soft);color:var(--ink);font-size:13px;font-family:inherit;resize:vertical}
+  .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:flex-start;justify-content:center;padding:24px 16px;z-index:50}
+  .modal{background:var(--card);border:1px solid var(--line);border-radius:14px;width:100%;max-width:640px;max-height:88vh;display:flex;flex-direction:column;box-shadow:0 12px 44px rgba(0,0,0,.55)}
+  .modal-head{display:flex;justify-content:space-between;align-items:center;padding:14px 18px;border-bottom:1px solid var(--line)}
+  .modal-head b{font-size:16px}
+  .modal-head button{margin:0}
+  .tabs{display:flex;gap:6px;padding:12px 16px 0;flex-wrap:wrap}
+  .tab{background:transparent;border:1px solid var(--line);border-radius:8px;color:var(--muted);padding:7px 14px;font-size:13px;font-weight:600;cursor:pointer;margin:0}
+  .tab.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .modal-body{padding:16px 18px;overflow:auto}
 </style>
 </head>
 <body>
@@ -57,70 +66,89 @@
     </div>
   </div>
 
-  <div class="card" id="settingsCard" style="display:none">
-    <b>Mes paramètres de connexion Actual</b>
-    <div class="mini" style="margin-top:2px">Ta config est privée : tu importes dans ton propre budget, isolé des autres utilisateurs.</div>
-    <div class="grid2" style="margin-top:12px">
-      <div><label class="mini">URL du serveur</label><input type="text" id="s_url" placeholder="https://actual..."></div>
-      <div><label class="mini">ID de synchronisation (budget)</label><input type="text" id="s_sync" placeholder="ea76be7f-..."></div>
-      <div><label class="mini">Mot de passe serveur</label><input type="password" id="s_pw" placeholder="(inchangé)"></div>
-      <div><label class="mini">Mot de passe de chiffrement</label><input type="password" id="s_e2e" placeholder="(inchangé)"></div>
-      <div><label class="mini">Nom de budget (si pas d'ID)</label><input type="text" id="s_budget" placeholder="Budget EC"></div>
-    </div>
-    <div class="row" style="margin-top:12px"><button id="s_save">Enregistrer</button><span id="s_msg" class="mini"></span></div>
-
-    <hr style="border:0;border-top:1px solid var(--line);margin:18px 0">
-    <b>Correspondances de comptes</b>
-    <div class="mini" style="margin:2px 0 8px">Relie un compte du fichier à un compte Actual (enregistré automatiquement). La clé selon la banque : <b>nom du compte</b> (Sumeria CSV), <b>n° ACCTID</b> (BNP OFX), <b>nom du fichier</b> (SG QIF).</div>
-    <datalist id="acctList"></datalist>
-    <div id="aliasRows"></div>
-    <div class="row" style="gap:8px;margin-top:8px">
-      <input type="text" id="a_key" placeholder="ex. 00050014183 / Économie" style="max-width:180px">
-      <span class="mini">→</span>
-      <input type="text" id="a_val" list="acctList" placeholder="compte Actual" style="max-width:180px">
-      <button class="ghost" id="a_add">Ajouter</button>
-    </div>
-
-    <hr style="border:0;border-top:1px solid var(--line);margin:18px 0">
-    <b>Mon mot de passe</b>
-    <div class="row" style="gap:8px;margin-top:8px">
-      <input type="password" id="p_cur" placeholder="mot de passe actuel" style="max-width:170px">
-      <input type="password" id="p_new" placeholder="nouveau (min. 10)" style="max-width:170px">
-      <button class="ghost" id="p_btn">Changer</button>
-      <span id="p_msg" class="mini"></span>
-    </div>
-
-    <div id="usersBlock" style="display:none">
-      <hr style="border:0;border-top:1px solid var(--line);margin:18px 0">
-      <b>Utilisateurs</b> <span class="mini">(admin)</span>
-      <div id="userList" class="mini" style="margin:8px 0"></div>
-      <div class="row" style="gap:8px">
-        <input type="text" id="u_name" placeholder="identifiant" style="max-width:150px">
-        <input type="password" id="u_pw" placeholder="mot de passe" style="max-width:150px">
-        <label class="chk"><input type="checkbox" id="u_admin"> admin</label>
-        <button class="ghost" id="u_add">Ajouter</button>
+  <div class="modal-overlay" id="modalOverlay">
+    <div class="modal">
+      <div class="modal-head">
+        <b>Paramètres</b>
+        <button class="ghost" id="modalClose">Fermer ✕</button>
       </div>
-
-      <hr style="border:0;border-top:1px solid var(--line);margin:18px 0">
-      <div class="row" style="justify-content:space-between">
-        <b>Connexions bloquées</b>
-        <button class="ghost" id="unlockAll">Tout débloquer</button>
+      <div class="tabs">
+        <button class="tab active" data-tab="conn">Connexion</button>
+        <button class="tab" data-tab="accts">Comptes</button>
+        <button class="tab" data-tab="pwd">Mon compte</button>
+        <button class="tab" id="tabAdmin" data-tab="admin" style="display:none">Admin</button>
       </div>
-      <div id="lockList" class="mini" style="margin:8px 0"></div>
+      <div class="modal-body">
 
-      <hr style="border:0;border-top:1px solid var(--line);margin:18px 0">
-      <b>Notifications ntfy</b>
-      <div class="mini" style="margin:2px 0 8px">Alerte quand un compte se bloque. Variables utilisables : <code>{account}</code>, <code>{ip}</code>, <code>{max}</code>.</div>
-      <div class="grid2">
-        <div><label class="mini">URL du topic ntfy</label><input type="text" id="n_url" placeholder="https://ntfy.../mon-topic"></div>
-        <div><label class="mini">Jeton (optionnel)</label><input type="password" id="n_token" placeholder="(inchangé)"></div>
-      </div>
-      <label class="mini" style="display:block;margin-top:8px">Message</label>
-      <textarea id="n_tpl" rows="3"></textarea>
-      <div class="row" style="gap:8px;margin-top:8px">
-        <button id="n_save">Enregistrer</button>
-        <button class="ghost" id="n_test">Envoyer un test</button>
-        <span id="n_msg" class="mini"></span>
+        <div class="tabpane" data-pane="conn">
+          <b>Mes paramètres de connexion Actual</b>
+          <div class="mini" style="margin-top:2px">Ta config est privée : tu importes dans ton propre budget, isolé des autres.</div>
+          <div class="grid2" style="margin-top:12px">
+            <div><label class="mini">URL du serveur</label><input type="text" id="s_url" placeholder="https://actual..."></div>
+            <div><label class="mini">ID de synchronisation (budget)</label><input type="text" id="s_sync" placeholder="ea76be7f-..."></div>
+            <div><label class="mini">Mot de passe serveur</label><input type="password" id="s_pw" placeholder="(inchangé)"></div>
+            <div><label class="mini">Mot de passe de chiffrement</label><input type="password" id="s_e2e" placeholder="(inchangé)"></div>
+            <div><label class="mini">Nom de budget (si pas d'ID)</label><input type="text" id="s_budget" placeholder="Budget EC"></div>
+          </div>
+          <div class="row" style="margin-top:12px"><button id="s_save">Enregistrer</button><span id="s_msg" class="mini"></span></div>
+        </div>
+
+        <div class="tabpane" data-pane="accts" style="display:none">
+          <b>Correspondances de comptes</b>
+          <div class="mini" style="margin:2px 0 8px">Relie un compte du fichier à un compte Actual (enregistré automatiquement). La clé selon la banque : <b>nom du compte</b> (Sumeria CSV), <b>n° ACCTID</b> (BNP OFX), <b>nom du fichier</b> (SG QIF).</div>
+          <datalist id="acctList"></datalist>
+          <div id="aliasRows"></div>
+          <div class="row" style="gap:8px;margin-top:8px">
+            <input type="text" id="a_key" placeholder="ex. 00050014183 / Économie" style="max-width:180px">
+            <span class="mini">→</span>
+            <input type="text" id="a_val" list="acctList" placeholder="compte Actual" style="max-width:180px">
+            <button class="ghost" id="a_add">Ajouter</button>
+          </div>
+        </div>
+
+        <div class="tabpane" data-pane="pwd" style="display:none">
+          <b>Mon mot de passe</b>
+          <div class="row" style="gap:8px;margin-top:8px">
+            <input type="password" id="p_cur" placeholder="mot de passe actuel" style="max-width:170px">
+            <input type="password" id="p_new" placeholder="nouveau (min. 10)" style="max-width:170px">
+            <button class="ghost" id="p_btn">Changer</button>
+            <span id="p_msg" class="mini"></span>
+          </div>
+        </div>
+
+        <div class="tabpane" data-pane="admin" style="display:none">
+          <b>Utilisateurs</b>
+          <div id="userList" class="mini" style="margin:8px 0"></div>
+          <div class="row" style="gap:8px">
+            <input type="text" id="u_name" placeholder="identifiant" style="max-width:150px">
+            <input type="password" id="u_pw" placeholder="mot de passe" style="max-width:150px">
+            <label class="chk"><input type="checkbox" id="u_admin"> admin</label>
+            <button class="ghost" id="u_add">Ajouter</button>
+          </div>
+
+          <hr style="border:0;border-top:1px solid var(--line);margin:18px 0">
+          <div class="row" style="justify-content:space-between">
+            <b>Connexions bloquées</b>
+            <button class="ghost" id="unlockAll">Tout débloquer</button>
+          </div>
+          <div id="lockList" class="mini" style="margin:8px 0"></div>
+
+          <hr style="border:0;border-top:1px solid var(--line);margin:18px 0">
+          <b>Notifications ntfy</b>
+          <div class="mini" style="margin:2px 0 8px">Alerte quand un compte se bloque. Variables : <code>{account}</code>, <code>{ip}</code>, <code>{max}</code>.</div>
+          <div class="grid2">
+            <div><label class="mini">URL du topic ntfy</label><input type="text" id="n_url" placeholder="https://ntfy.../mon-topic"></div>
+            <div><label class="mini">Jeton (optionnel)</label><input type="password" id="n_token" placeholder="(inchangé)"></div>
+          </div>
+          <label class="mini" style="display:block;margin-top:8px">Message</label>
+          <textarea id="n_tpl" rows="3"></textarea>
+          <div class="row" style="gap:8px;margin-top:8px">
+            <button id="n_save">Enregistrer</button>
+            <button class="ghost" id="n_test">Envoyer un test</button>
+            <span id="n_msg" class="mini"></span>
+          </div>
+        </div>
+
       </div>
     </div>
   </div>
