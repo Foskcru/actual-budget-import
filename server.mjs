@@ -359,25 +359,46 @@ function parseQIF(text) {
   return { transactions };
 }
 
-// Regles de demarrage : [mot-cle dans les Notes, nom de categorie]
+// Categorie speciale "garde-fou" : si un libelle matche PLUSIEURS categories differentes a la fois,
+// on l'y range au lieu de choisir au hasard. Objectif : elle doit rester a 0 (sinon un mot-cle est ambigu).
+const CONFLICT_CATEGORY_NAME = 'À vérifier';
+
+// Regles de demarrage generiques (France) : [mot-cle cherche dans les Notes, nom de categorie].
+// L'ordre n'a plus d'importance : un libelle ambigu (>=2 categories) part dans "À vérifier".
 const SEED_RULES = [
-  ['CARREFOUR', 'Alimentation'], ['MONOPRIX', 'Alimentation'], ['FRANPRIX', 'Alimentation'],
-  ['LIDL', 'Alimentation'], ['AUCHAN', 'Alimentation'], ['INTERMARCHE', 'Alimentation'], ['BOULANGERIE', 'Alimentation'],
-  ['MCDO', 'Restaurants'], ['MCDONALD', 'Restaurants'], ['DELIVEROO', 'Restaurants'], ['UBER EATS', 'Restaurants'],
-  ['SUSHI', 'Restaurants'], ['SWILE', 'Restaurants'], ['BURGER', 'Restaurants'],
-  ['PATHE', 'Sorties'], ['CINE', 'Sorties'], ['ACHATBILLETCINE', 'Sorties'],
-  ['AMAZON', 'Shopping / Vêtements'], ['VINTED', 'Shopping / Vêtements'], ['ZALANDO', 'Shopping / Vêtements'], ['ACTION', 'Shopping / Vêtements'],
-  ['APPLE.COM', 'Abonnements'], ['NETFLIX', 'Abonnements'], ['SPOTIFY', 'Abonnements'], ['YOUTUBE', 'Abonnements'],
-  ['SNCF', 'Transport'], ['TOTAL', 'Transport'], ['ESSO', 'Transport'], ['CARBURANT', 'Transport'], ['UBER ', 'Transport'],
-  ['PHARMACIE', 'Santé'],
+  // -- Depenses fixes --
+  ['LOYER','Loyer / Crédit'],['FONCIA','Loyer / Crédit'],['CITYA','Loyer / Crédit'],['NEXITY','Loyer / Crédit'],['CREDIT IMMO','Loyer / Crédit'],['PRET IMMO','Loyer / Crédit'],['ECHEANCE PRET','Loyer / Crédit'],['MENSUALITE','Loyer / Crédit'],
+  ['EDF','Énergie & charges'],['ENGIE','Énergie & charges'],['EKWATEUR','Énergie & charges'],['MINT ENERGIE','Énergie & charges'],['VATTENFALL','Énergie & charges'],['ENEDIS','Énergie & charges'],['GRDF','Énergie & charges'],['VEOLIA','Énergie & charges'],['SUEZ','Énergie & charges'],['SAUR','Énergie & charges'],['SYNDIC','Énergie & charges'],
+  ['FREE MOBILE','Internet / Téléphone'],['ORANGE','Internet / Téléphone'],['SFR','Internet / Téléphone'],['BOUYGUES','Internet / Téléphone'],['SOSH','Internet / Téléphone'],['RED BY SFR','Internet / Téléphone'],['B&YOU','Internet / Téléphone'],['PRIXTEL','Internet / Téléphone'],['LA POSTE MOBILE','Internet / Téléphone'],
+  ['COTISATION CARTE','Banque'],['FRAIS BANCAIRE','Banque'],['FRAIS TENUE','Banque'],['AGIOS','Banque'],['COMMISSION INTERV','Banque'],['ASSURANCE MOYEN PAIEMENT','Banque'],
+  ['ASSURANCE','Assurances'],['MAIF','Assurances'],['MACIF','Assurances'],['MATMUT','Assurances'],['MAAF','Assurances'],['GMF','Assurances'],['AXA','Assurances'],['ALLIANZ','Assurances'],['GROUPAMA','Assurances'],['DIRECT ASSURANCE','Assurances'],['LUKO','Assurances'],
+  ['MUTUELLE','Mutuelle santé'],['HARMONIE MUTUELLE','Mutuelle santé'],['MGEN','Mutuelle santé'],['ALAN','Mutuelle santé'],['APRIL','Mutuelle santé'],['MALAKOFF','Mutuelle santé'],['HENNER','Mutuelle santé'],
+  ['IMPOT','Impôts'],['DGFIP','Impôts'],['TRESOR PUBLIC','Impôts'],['FINANCES PUBLIQUES','Impôts'],['TAXE FONCIERE','Impôts'],['TAXE HABITATION','Impôts'],['ANTAI','Impôts'],['AMENDE','Impôts'],['URSSAF','Impôts'],
+  ['NETFLIX','Abonnements'],['SPOTIFY','Abonnements'],['DEEZER','Abonnements'],['DISNEY','Abonnements'],['PRIME VIDEO','Abonnements'],['CANAL','Abonnements'],['APPLE.COM','Abonnements'],['ICLOUD','Abonnements'],['YOUTUBE','Abonnements'],['MICROSOFT','Abonnements'],['ADOBE','Abonnements'],['CHATGPT','Abonnements'],['OPENAI','Abonnements'],
+  // -- Vie courante --
+  ['CARREFOUR','Alimentation'],['LECLERC','Alimentation'],['LIDL','Alimentation'],['ALDI','Alimentation'],['AUCHAN','Alimentation'],['INTERMARCHE','Alimentation'],['MONOPRIX','Alimentation'],['FRANPRIX','Alimentation'],['SUPER U','Alimentation'],['HYPER U','Alimentation'],['CASINO','Alimentation'],['PICARD','Alimentation'],['GRAND FRAIS','Alimentation'],['BIOCOOP','Alimentation'],['BOULANGERIE','Alimentation'],
+  ['MCDO','Restaurants'],['MCDONALD','Restaurants'],['BURGER KING','Restaurants'],['KFC','Restaurants'],['SUBWAY','Restaurants'],['DELIVEROO','Restaurants'],['UBER EATS','Restaurants'],['JUST EAT','Restaurants'],['DOMINO','Restaurants'],['PIZZA','Restaurants'],['SUSHI','Restaurants'],['KEBAB','Restaurants'],['RESTAURANT','Restaurants'],['SWILE','Restaurants'],['EDENRED','Restaurants'],
+  ['SNCF','Transport'],['RATP','Transport'],['NAVIGO','Transport'],['BLABLACAR','Transport'],['OUIGO','Transport'],['FLIXBUS','Transport'],['UBER ','Transport'],['BOLT','Transport'],['PEAGE','Transport'],['VINCI AUTOROUTE','Transport'],['SANEF','Transport'],['APRR','Transport'],['ESSO','Transport'],['BP ','Transport'],['AVIA','Transport'],['CARBURANT','Transport'],['PARKING','Transport'],['INDIGO','Transport'],
+  ['IZIVIA','Recharge voiture'],['IONITY','Recharge voiture'],['SHELL RECHARGE','Recharge voiture'],['TOTALENERGIES CHARGE','Recharge voiture'],['FRESHMILE','Recharge voiture'],['CHARGEMAP','Recharge voiture'],['ALLEGO','Recharge voiture'],['POWERDOT','Recharge voiture'],['ELECTRA','Recharge voiture'],['TESLA SUPERCHARG','Recharge voiture'],
+  ['PHARMACIE','Santé'],['DOCTOLIB','Santé'],['DENTAIRE','Santé'],['DENTISTE','Santé'],['OPTICIEN','Santé'],['LABORATOIRE','Santé'],['LABO ','Santé'],['KINE','Santé'],['MEDECIN','Santé'],['CLINIQUE','Santé'],['HOPITAL','Santé'],
+  ['AMAZON','Shopping / Vêtements'],['ZALANDO','Shopping / Vêtements'],['VINTED','Shopping / Vêtements'],['ZARA','Shopping / Vêtements'],['H&M','Shopping / Vêtements'],['UNIQLO','Shopping / Vêtements'],['KIABI','Shopping / Vêtements'],['PRIMARK','Shopping / Vêtements'],['SHEIN','Shopping / Vêtements'],['ASOS','Shopping / Vêtements'],['GIFI','Shopping / Vêtements'],['CDISCOUNT','Shopping / Vêtements'],['VEEPEE','Shopping / Vêtements'],
+  // -- Loisirs & plaisirs --
+  ['PATHE','Sorties'],['GAUMONT','Sorties'],['UGC','Sorties'],['CGR','Sorties'],['MK2','Sorties'],['CINEMA','Sorties'],['THEATRE','Sorties'],['CONCERT','Sorties'],['DICE','Sorties'],['SHOTGUN','Sorties'],
+  ['DECATHLON','Loisirs / Hobbies'],['GO SPORT','Loisirs / Hobbies'],['INTERSPORT','Loisirs / Hobbies'],['CULTURA','Loisirs / Hobbies'],['MICROMANIA','Loisirs / Hobbies'],['STEAM','Loisirs / Hobbies'],['PLAYSTATION','Loisirs / Hobbies'],['NINTENDO','Loisirs / Hobbies'],['BASIC FIT','Loisirs / Hobbies'],['FITNESS PARK','Loisirs / Hobbies'],['FNAC','Loisirs / Hobbies'],
+  ['BOOKING','Vacances / Voyages'],['AIRBNB','Vacances / Voyages'],['EXPEDIA','Vacances / Voyages'],['HOTEL','Vacances / Voyages'],['RYANAIR','Vacances / Voyages'],['EASYJET','Vacances / Voyages'],['AIR FRANCE','Vacances / Voyages'],['TRANSAVIA','Vacances / Voyages'],['CENTER PARCS','Vacances / Voyages'],['CLUB MED','Vacances / Voyages'],['CAMPING','Vacances / Voyages'],['ABRITEL','Vacances / Voyages'],
+  // -- Revenus (categories NON creees auto : reliees seulement si elles existent deja) --
+  ['SALAIRE','Salaire'],['VIR SALAIRE','Salaire'],
+  ['REMBOURSEMENT','Remboursements'],['CPAM','Remboursements'],['AMELI','Remboursements'],
+  ['POLE EMPLOI','Autres revenus'],['FRANCE TRAVAIL','Autres revenus'],['ALLOCATION','Autres revenus'],
 ];
 // Regroupe par categorie : { 'Alimentation': ['CARREFOUR', ...], ... } -> 1 regle OR par categorie
 const SEED_BY_CAT = {};
 for (const [kw, cat] of SEED_RULES) { (SEED_BY_CAT[cat] ||= []).push(kw); }
 const SEED_KW = new Set(SEED_RULES.map(([kw]) => kw.toLowerCase().trim()));
-// Noms des categories utilisees par les regles de depart -> bouton "Creer les categories de depart".
-// Derive de SEED_BY_CAT : ajouter une regle ci-dessus suffit pour que sa categorie soit creee.
-const SEED_CATEGORY_NAMES = Object.keys(SEED_BY_CAT);
+// Categories de revenus : on NE les cree pas dans le groupe de depenses (elles restent optionnelles).
+const SEED_INCOME_CATEGORIES = new Set(['Salaire', 'Remboursements', 'Autres revenus'].map(norm));
+// Noms des categories a creer via "Creer les categories" : depenses + garde-fou (pas les revenus).
+const SEED_CATEGORY_NAMES = [CONFLICT_CATEGORY_NAME, ...Object.keys(SEED_BY_CAT).filter(n => !SEED_INCOME_CATEGORIES.has(norm(n)))];
 
 // ============================ connexion Actual ============================
 let initialized = false, initedWith = null, busy = false, apiInternals = null;
@@ -453,21 +474,26 @@ async function buildCategoryMatcher() {
   let rules = [], cats = [];
   try { rules = await api.getRules(); cats = await api.getCategories(); } catch { return () => null; }
   const validIds = new Set(cats.map(c => c.id));
+  const conflictCatId = cats.find(c => norm(c.name) === norm(CONFLICT_CATEGORY_NAME))?.id || null;
   const matchers = [];
   for (const r of rules) {
     const setCat = (r.actions || []).find(a => a.field === 'category' && a.op === 'set');
     if (!setCat || !validIds.has(setCat.value)) continue; // ignore les regles pointant une categorie inexistante
+    if (conflictCatId && setCat.value === conflictCatId) continue; // "À vérifier" n'est jamais assignee par une regle
     const notesConds = (r.conditions || []).filter(c => c.field === 'notes' && c.op === 'contains');
     if (!notesConds.length) continue;
     matchers.push({ op: r.conditionsOp || 'and', kws: notesConds.map(c => String(c.value).toLowerCase()), catId: setCat.value });
   }
   const fn = (notes) => {
     const n = String(notes || '').toLowerCase();
+    const hitCats = [];
     for (const m of matchers) {
       const hit = m.op === 'and' ? m.kws.every(k => n.includes(k)) : m.kws.some(k => n.includes(k));
-      if (hit) return m.catId;
+      if (hit && !hitCats.includes(m.catId)) hitCats.push(m.catId);
     }
-    return null;
+    if (hitCats.length === 0) return null;              // aucun mot-cle -> laisse "À catégoriser"
+    if (hitCats.length === 1) return hitCats[0];        // une seule categorie -> on l'assigne
+    return conflictCatId || hitCats[0];                 // ambigu (>=2) -> garde-fou "À vérifier" (doit rester a 0)
   };
   fn.count = matchers.length;
   fn.rulesTotal = rules.length;
