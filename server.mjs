@@ -16,8 +16,25 @@ import { createRequire } from 'node:module';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Version de @actual-app/api embarquee par l'app (a comparer a la version du serveur Actual).
+// NB : require('@actual-app/api/package.json') est bloque par le champ "exports" -> on lit le fichier.
 let API_VERSION = 'inconnue';
-try { API_VERSION = createRequire(import.meta.url)('@actual-app/api/package.json').version; } catch {}
+try {
+  const req = createRequire(import.meta.url);
+  let pjPath = path.join(__dirname, 'node_modules/@actual-app/api/package.json'); // cas Docker (WORKDIR /app)
+  if (!fs.existsSync(pjPath)) {
+    // repli portable : depuis le point d'entree resolu, remonter jusqu'au package.json du paquet
+    pjPath = null;
+    try {
+      let dir = path.dirname(req.resolve('@actual-app/api'));
+      for (let i = 0; i < 8 && dir !== path.dirname(dir); i++) {
+        const cand = path.join(dir, 'package.json');
+        if (fs.existsSync(cand)) { const j = JSON.parse(fs.readFileSync(cand, 'utf8')); if (j.name === '@actual-app/api') { pjPath = cand; break; } }
+        dir = path.dirname(dir);
+      }
+    } catch {}
+  }
+  if (pjPath) API_VERSION = JSON.parse(fs.readFileSync(pjPath, 'utf8')).version || 'inconnue';
+} catch {}
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const PORT = process.env.PORT || 3000;
 const SECURE_COOKIE = /^(1|true|yes)$/i.test((process.env.COOKIE_SECURE || '').trim().replace(/^["']|["']$/g, '')); // mettre true derriere HTTPS
