@@ -14,15 +14,16 @@ function renderFiles(){
 }
 
 // --- authentification ---
-let IS_ADMIN = false, CURRENT_USER = '';
+let IS_ADMIN = false, CURRENT_USER = '', APP_API_VER = '';
 (async function guard(){
   try {
     const m = await (await fetch('/api/me')).json();
     if(!m.ok){ location.href='/login.html'; return; }
-    IS_ADMIN = !!m.isAdmin; CURRENT_USER = m.username;
+    IS_ADMIN = !!m.isAdmin; CURRENT_USER = m.username; APP_API_VER = m.apiVersion || '';
     $('who').textContent = m.username + (m.isAdmin ? ' · admin' : '');
     $('btnSettings').style.display='';           // chacun gère ses propres réglages
     if(IS_ADMIN) $('tabAdmin').style.display='';
+    $('verInfo').innerHTML = `Version de l'app (API Actual) : <b>v${esc(APP_API_VER||'?')}</b> <span class="mini">— clique « Tester la connexion » pour comparer au serveur.</span>`;
   } catch { location.href='/login.html'; }
 })();
 $('btnLogout').onclick = async () => { await fetch('/api/logout',{method:'POST'}); location.href='/login.html'; };
@@ -286,6 +287,11 @@ $('btnStatus').onclick = async () => {
     if(!d.ok) throw new Error(d.error);
     const rep = (d.repaired||d.repairedTp) ? ` · <span class="tag-ok">réparé : ${d.repaired||0} catégorie(s), ${d.repairedTp||0} compte(s)</span>` : '';
     $('status').innerHTML = `<span class="pill ok">connecté</span> serveur v${d.serverVersion||'?'} · ${d.accounts.length} comptes · budget ouvert${rep}`;
+    const sv = d.serverVersion||'?', av = d.apiVersion||APP_API_VER||'?';
+    const mism = (sv!=='?' && av!=='?' && String(sv)!==String(av));
+    $('verInfo').innerHTML = `Version de l'app (API Actual) : <b>v${esc(av)}</b> · Serveur Actual : <b>v${esc(sv)}</b> `
+      + (mism ? `<span class="tag-no">⚠️ versions différentes → risque d'erreur de schéma (mets l'app à la même version que le serveur)</span>`
+              : `<span class="tag-ok">✓ alignées</span>`);
   } catch(e){ $('status').innerHTML = `<span class="pill err">échec</span> ${e.message}`; }
 };
 

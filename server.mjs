@@ -12,8 +12,12 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// Version de @actual-app/api embarquee par l'app (a comparer a la version du serveur Actual).
+let API_VERSION = 'inconnue';
+try { API_VERSION = createRequire(import.meta.url)('@actual-app/api/package.json').version; } catch {}
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const PORT = process.env.PORT || 3000;
 const SECURE_COOKIE = /^(1|true|yes)$/i.test((process.env.COOKIE_SECURE || '').trim().replace(/^["']|["']$/g, '')); // mettre true derriere HTTPS
@@ -630,7 +634,7 @@ app.post('/api/logout', (req, res) => {
   res.json({ ok: true });
 });
 
-app.get('/api/me', requireAuth, (req, res) => res.json({ ok: true, username: req.user.username, isAdmin: req.user.isAdmin }));
+app.get('/api/me', requireAuth, (req, res) => res.json({ ok: true, username: req.user.username, isAdmin: req.user.isAdmin, apiVersion: API_VERSION }));
 
 // Changer son propre mot de passe
 app.post('/api/change-password', requireAuth, (req, res) => {
@@ -769,7 +773,7 @@ app.get('/api/status', requireAuth, async (req, res) => {
     const repairedTp = await repairTransferPayees();       // repare comptes sans beneficiaire de transfert
     if (repaired || repairedTp) { try { await api.sync(); } catch {} }
     const accounts = await api.getAccounts();
-    res.json({ ok: true, serverVersion: version, syncId, repaired, repairedTp, budgets: budgets.map(b => b.name), accounts: accounts.filter(a => !a.closed).map(a => a.name) });
+    res.json({ ok: true, serverVersion: version, apiVersion: API_VERSION, syncId, repaired, repairedTp, budgets: budgets.map(b => b.name), accounts: accounts.filter(a => !a.closed).map(a => a.name) });
   } catch (e) { console.error('[erreur]', e?.message || e); res.status(500).json({ ok: false, error: String(e?.message || e) }); }
   finally { busy = false; }
 });
