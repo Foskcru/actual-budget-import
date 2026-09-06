@@ -1019,6 +1019,43 @@ app.post('/api/seed-config/reset', requireAuth, (req, res) => {
   db.prepare('DELETE FROM user_settings WHERE user_id=? AND key=?').run(req.user.userId, 'seedConfig');
   res.json({ ok: true, config: defaultSeedConfig() });
 });
+// Fait "remonter" la config depuis Actual : structure reelle (groupes/categories) + mots-cles
+// des regles SIMPLES (100% notes-contains -> set categorie). Les regles avancees sont ignorees
+// (elles restent dans Actual). Ne sauvegarde rien : l'utilisateur relit puis Enregistre s'il veut.
+app.get('/api/seed-config/from-actual', requireAuth, async (req, res) => {
+  if (busy) return res.status(409).json({ ok: false, error: 'Un traitement est deja en cours.' });
+  busy = true;
+  try {
+    await openBudget(req.user.userId);
+    const groups = await api.getCategoryGroups();
+    const cats = await api.getCategories();
+    const rules = await api.getRules();
+    const validIds = new Set(cats.map(c => c.id));
+    // mots-cles par categorie, uniquement depuis les regles simples (notes-contains -> set categorie valide)
+    const kwByCat = new Map();
+    for (const r of rules) {
+      const setCat = (r.actions || []).find(a => a.field === 'category' && a.op === 'set');
+      if (!setCat || !validIds.has(setCat.value)) continue;
+      const conds = r.conditions || [];
+      const notesOnly = conds.length > 0 && conds.every(c => c.field === 'notes' && c.op === 'contains');
+      if (!notesOnly) continue; // regle avancee -> ignoree
+      const set = kwByCat.get(setCat.value) || new Set();
+      for (const c of conds) { const v = String(c.value || '').trim(); if (v) set.add(v); }
+      kwByCat.set(setCat.value, set);
+    }
+    const catsByGroup = new Map();
+    for (const c of cats) { if (c.hidden) continue; if (!catsByGroup.has(c.group_id)) catsByGroup.set(c.group_id, []); catsByGroup.get(c.group_id).push(c); }
+    const cfgGroups = [];
+    for (const g of groups) {
+      if (g.hidden) continue;
+      const gcats = (catsByGroup.get(g.id) || []).map(c => ({ name: c.name, kws: [...(kwByCat.get(c.id) || [])] }));
+      cfgGroups.push({ name: g.name, income: !!g.is_income, cats: gcats });
+    }
+    const conflictName = getSeedConfig(req.user.userId).conflictName || CONFLICT_CATEGORY_NAME; // Actual n'a pas de garde-fou : on garde celui de l'utilisateur
+    res.json({ ok: true, config: { groups: cfgGroups, conflictName } });
+  } catch (e) { console.error('[erreur]', e?.message || e); res.status(500).json({ ok: false, error: String(e?.message || e) }); }
+  finally { busy = false; }
+});
 
 app.use(express.static(path.join(__dirname, 'public')));
 

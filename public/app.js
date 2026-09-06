@@ -224,6 +224,17 @@ $('seedReset').onclick = async ()=>{
 async function loadSeedConfig(){
   try { const d = await (await fetch('/api/seed-config')).json(); if(d.ok) renderSeedEditor(d.config); } catch {}
 }
+$('seedFromActual').onclick = async ()=>{
+  $('seedFromActual').disabled = true; const old = $('seedFromActual').textContent; $('seedFromActual').textContent = 'Chargement…';
+  $('seedMsg').textContent = '';
+  try {
+    const d = await (await fetch('/api/seed-config/from-actual')).json();
+    if(!d.ok) throw new Error(d.error);
+    renderSeedEditor(d.config);
+    $('seedMsg').innerHTML = '<span class="tag-ok">Chargé depuis Actual ✓</span> — vérifie, puis clique « Enregistrer » pour garder. (Les règles avancées d\'Actual ne sont pas affichées mais restent actives.)';
+  } catch(e){ $('seedMsg').textContent = 'Erreur : '+e.message; }
+  finally { $('seedFromActual').disabled = false; $('seedFromActual').textContent = old; }
+};
 async function loadUsers(){
   const d = await (await fetch('/api/users')).json(); if(!d.ok) return;
   $('userList').innerHTML = d.users.map(u=>{

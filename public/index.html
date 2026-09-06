@@ -133,7 +133,10 @@
             À l'import, si le libellé d'une opération contient un mot-clé, l'opération est classée dans cette catégorie (ex. « CARREFOUR » → <i>Alimentation</i>). Les boutons <b>« Créer les catégories / règles »</b> (page d'accueil) appliquent cette liste à ton budget Actual.<br>
             <b>Garde-fou</b> : si un libellé contient des mots-clés de <b>plusieurs</b> catégories à la fois, l'app ne peut pas choisir → elle range l'opération dans la catégorie que tu coches « garde-fou », pour que tu vérifies. Si cette catégorie reste <b>vide (à 0)</b>, tout va bien ; si elle se remplit, c'est qu'un mot-clé est trop vague.
           </div>
-          <div class="row" style="gap:8px;margin-bottom:8px"><button class="ghost" id="seedToggleAll">Tout replier</button></div>
+          <div class="row" style="gap:8px;margin-bottom:8px">
+            <button class="ghost" id="seedToggleAll">Tout replier</button>
+            <button class="ghost" id="seedFromActual" title="Relit les groupes/catégories et les règles simples (notes) depuis Actual">⬇ Charger depuis Actual</button>
+          </div>
           <div id="seedEditor"></div>
           <div class="row" style="gap:8px;margin-top:8px">
             <button class="ghost" id="seedAddGroup">+ groupe</button>
