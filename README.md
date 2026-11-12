@@ -87,7 +87,7 @@ Elles servent seulement de **valeurs par défaut** au tout premier démarrage (p
 - Voir `../RAPPORT-SECURITE.md` pour l'analyse complète.
 
 > ⚠️ La version de l'API (`@actual-app/api`) doit correspondre à celle de ton serveur Actual.
-> Ce dépôt cible **26.9.0** — adapte `package.json` + rebuild si tu mets Actual à jour.
+> Ce dépôt cible **26.11.0** — adapte `package.json` + rebuild si tu mets Actual à jour.
 
 ## Suggestions de catégories & IA locale
 
