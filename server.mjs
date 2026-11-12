@@ -13,6 +13,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
+import { buildModel, suggest, nearestExamples } from './suggest.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Version de @actual-app/api embarquee par l'app (a comparer a la version du serveur Actual).
@@ -42,6 +43,11 @@ const LOCK_MAX = 8;                       // echecs avant blocage
 const LOCK_MS = 24 * 3600 * 1000;         // duree du blocage : 1 jour
 const NTFY_URL = (process.env.NTFY_URL || '').trim();   // ex https://ntfy.mon-nas/actual-alertes
 const NTFY_TOKEN = (process.env.NTFY_TOKEN || '').trim();
+// IA locale : le NAVIGATEUR de l'utilisateur appelle l'IA installee sur SON PC (localhost).
+// La CSP doit donc l'autoriser. AI_CONNECT_SRC (optionnel) = origines en plus, separees par des espaces
+// (ex. "http://192.168.1.20:11434" si l'IA tourne sur un autre PC du reseau).
+const AI_CONNECT_SRC = ['http://localhost:*', 'http://127.0.0.1:*',
+  ...String(process.env.AI_CONNECT_SRC || '').split(/\s+/).filter(x => /^https?:\/\/[\w.\-\[\]:*]+$/.test(x))].join(' ');
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
 // Chiffrement au repos des secrets (M3) : cle depuis APP_SECRET (hors volume /data).
@@ -602,7 +608,7 @@ app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'no-referrer');
-  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'");
+  res.setHeader('Content-Security-Policy', `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ${AI_CONNECT_SRC}; base-uri 'self'; form-action 'self'; frame-ancestors 'none'`);
   if (SECURE_COOKIE) res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
   next();
 });
@@ -730,6 +736,9 @@ app.get('/api/settings', requireAuth, (req, res) => {
     serverURL: c.serverURL, syncId: c.syncId, budgetName: c.budgetName,
     aliases: JSON.stringify(c.aliases),
     hasPassword: !!c.password, hasE2e: !!c.e2ePassword,   // secrets non renvoyes
+    aiProvider: getSetting(req.user.userId, 'aiProvider', 'ollama'),
+    aiUrl: getSetting(req.user.userId, 'aiUrl', 'http://localhost:11434'),
+    aiModel: getSetting(req.user.userId, 'aiModel', ''),
   });
 });
 app.post('/api/settings', requireAuth, (req, res) => {
@@ -742,6 +751,16 @@ app.post('/api/settings', requireAuth, (req, res) => {
   if (b.password) setSecret(uid, 'password', b.password);
   if (b.e2ePassword) setSecret(uid, 'e2ePassword', b.e2ePassword);
   if (b.clearE2e) setSetting(uid, 'e2ePassword', '');
+  if (b.aiProvider !== undefined) setSetting(uid, 'aiProvider', b.aiProvider === 'openai' ? 'openai' : 'ollama');
+  if (b.aiUrl !== undefined) {
+    const u = String(b.aiUrl).trim().replace(/\/+$/, '');
+    if (u && !/^https?:\/\/[^\s"'<>]+$/i.test(u)) return res.status(400).json({ ok: false, error: 'Adresse de l\'IA invalide (ex. http://localhost:11434).' });
+    setSetting(uid, 'aiUrl', u);
+  }
+  if (b.aiModel !== undefined) setSetting(uid, 'aiModel', String(b.aiModel).trim().slice(0, 120));
+  if (b.aiProvider !== undefined || b.aiUrl !== undefined || b.aiModel !== undefined) {
+    if (b.serverURL === undefined && b.password === undefined && b.syncId === undefined && b.budgetName === undefined && !b.e2ePassword) return res.json({ ok: true }); // reglage IA seul : pas besoin de reconnecter Actual
+  }
   initedWith = null; // force une reconnexion avec les nouveaux reglages
   res.json({ ok: true });
 });
@@ -1053,6 +1072,126 @@ app.get('/api/seed-config/from-actual', requireAuth, async (req, res) => {
     }
     const conflictName = getSeedConfig(req.user.userId).conflictName || CONFLICT_CATEGORY_NAME; // Actual n'a pas de garde-fou : on garde celui de l'utilisateur
     res.json({ ok: true, config: { groups: cfgGroups, conflictName } });
+  } catch (e) { console.error('[erreur]', e?.message || e); res.status(500).json({ ok: false, error: String(e?.message || e) }); }
+  finally { busy = false; }
+});
+
+// ============================ suggestions de categories ============================
+// Lit l'historique du budget, apprend (suggest.mjs) et propose une categorie pour chaque
+// operation SANS categorie (ou rangee dans le garde-fou « À vérifier »).
+// Rien n'est ecrit ici : l'utilisateur valide ensuite (POST /api/suggest/apply).
+const SUGGEST_MAX_ITEMS = 500;
+function isoMonthsAgo(months) { const d = new Date(); d.setMonth(d.getMonth() - months); return d.toISOString().slice(0, 10); }
+app.get('/api/suggest', requireAuth, async (req, res) => {
+  if (busy) return res.status(409).json({ ok: false, error: 'Un traitement est deja en cours.' });
+  const months = Math.min(60, Math.max(1, parseInt(req.query.months, 10) || 12));   // fenetre des operations a classer
+  const learnMonths = Math.max(months, 24);                                           // fenetre d'apprentissage
+  busy = true;
+  try {
+    await openBudget(req.user.userId);
+    await repairCategoryMappings();
+    const [accounts, cats, groups, payees] = await Promise.all([api.getAccounts(), api.getCategories(), api.getCategoryGroups(), api.getPayees()]);
+    const conflictName = getSeedConfig(req.user.userId).conflictName || CONFLICT_CATEGORY_NAME;
+    const conflictId = cats.find(c => norm(c.name) === norm(conflictName))?.id || null;
+    const catIds = new Set(cats.map(c => c.id));
+    const payeeById = new Map(payees.map(p => [p.id, p]));
+    const groupName = new Map((groups || []).map(g => [g.id, g.name]));
+    const start = isoMonthsAgo(learnMonths), pendingFrom = isoMonthsAgo(months), end = new Date().toISOString().slice(0, 10);
+    const history = [], pending = [];
+    for (const a of accounts) {
+      if (a.offbudget) continue; // les comptes hors budget n'ont pas de categorie
+      const txs = await api.getTransactions(a.id, start, end);
+      for (const t of txs) {
+        if (t.is_parent || t.is_child || t.parent_id) continue;                 // ventilations : ignorees
+        const p = t.payee ? payeeById.get(t.payee) : null;
+        if (t.transfer_id || p?.transfer_acct) continue;                       // virements internes : pas de categorie
+        const row = { id: t.id, account: a.name, closed: !!a.closed, date: t.date, amount: t.amount, payee: t.payee || null,
+          payeeName: p?.name || '', notes: t.notes || '', importedPayee: t.imported_payee || '', category: t.category || null };
+        const known = row.category && catIds.has(row.category);
+        if (known && row.category !== conflictId) history.push(row);
+        else if (!a.closed && row.date >= pendingFrom) pending.push(row);
+      }
+    }
+    const model = buildModel(history);
+    pending.sort((x, y) => (y.date || '').localeCompare(x.date || ''));
+    const items = pending.slice(0, SUGGEST_MAX_ITEMS).map(t => ({
+      id: t.id, account: t.account, date: t.date, amount: t.amount, payeeName: t.payeeName, notes: t.notes,
+      current: t.category && catIds.has(t.category) ? t.category : null,
+      suggestion: suggest(model, t),
+      examples: nearestExamples(model, t, 8),
+    }));
+    const categories = cats.filter(c => !c.hidden && c.id !== conflictId)
+      .map(c => ({ id: c.id, name: c.name, group: groupName.get(c.group_id) || '', income: !!c.is_income }));
+    res.json({ ok: true, months, categories, conflictId, items, total: pending.length, learned: model.n,
+      withSuggestion: items.filter(i => i.suggestion).length });
+  } catch (e) { console.error('[erreur]', e?.message || e); res.status(500).json({ ok: false, error: String(e?.message || e) }); }
+  finally { busy = false; }
+});
+
+// Applique les choix valides par l'utilisateur, et (option) ajoute un mot-cle a la regle simple
+// de la categorie (meme format que « Créer les règles » : 1 regle « OU » par categorie, notes contient).
+// Le mot-cle est aussi ajoute a la config de l'utilisateur, sinon « Créer les règles » l'effacerait.
+app.post('/api/suggest/apply', requireAuth, async (req, res) => {
+  if (busy) return res.status(409).json({ ok: false, error: 'Un traitement est deja en cours.' });
+  const b = req.body || {};
+  const items = Array.isArray(b.items) ? b.items.slice(0, 1000) : [];
+  const rulesIn = Array.isArray(b.rules) ? b.rules.slice(0, 200) : [];
+  if (!items.length && !rulesIn.length) return res.status(400).json({ ok: false, error: 'Rien a appliquer.' });
+  busy = true;
+  try {
+    const uid = req.user.userId;
+    await openBudget(uid);
+    const cats = await api.getCategories();
+    const catById = new Map(cats.map(c => [c.id, c]));
+    let applied = 0; const errors = [];
+    for (const it of items) {
+      if (!it || typeof it.id !== 'string' || typeof it.category !== 'string' || !catById.has(it.category)) continue;
+      try { await api.updateTransaction(it.id, { category: it.category }); applied++; }
+      catch (e) { if (errors.length < 5) errors.push(String(e?.message || e)); }
+    }
+    // --- regles ---
+    let rulesCreated = 0, rulesUpdated = 0; const warnings = [];
+    if (rulesIn.length) {
+      let rules = await api.getRules();
+      const simpleOf = (r) => {
+        const setCat = (r.actions || []).find(a => a.field === 'category' && a.op === 'set');
+        const conds = r.conditions || [];
+        const notesOnly = conds.length > 0 && conds.every(c => c.field === 'notes' && c.op === 'contains');
+        return setCat && notesOnly ? { cat: setCat.value, kws: conds.map(c => String(c.value || '').toLowerCase()) } : null;
+      };
+      const cfg0 = getSeedConfig(uid); let cfgChanged = false;
+      for (const r0 of rulesIn) {
+        const catId = r0?.category, kw = String(r0?.keyword || '').trim();
+        if (!catById.has(catId) || kw.length < 3 || kw.length > 60) continue;
+        const kwl = kw.toLowerCase();
+        // garde-fou : le mot-cle recoupe-t-il une regle simple d'une AUTRE categorie ?
+        for (const r of rules) {
+          const sr = simpleOf(r); if (!sr || sr.cat === catId) continue;
+          const clash = sr.kws.find(k => k && (k.includes(kwl) || kwl.includes(k)));
+          if (clash) { warnings.push(`« ${kw} » recoupe « ${clash} » (${catById.get(sr.cat)?.name || '?'})`); break; }
+        }
+        const own = rules.find(r => { const sr = simpleOf(r); return sr && sr.cat === catId && (r.conditionsOp === 'or' || (r.conditions || []).length === 1); });
+        if (own) {
+          if (!simpleOf(own).kws.includes(kwl)) {
+            const upd = { ...own, conditionsOp: 'or', conditions: [...own.conditions, { field: 'notes', op: 'contains', value: kw }] };
+            await api.updateRule(upd); rulesUpdated++;
+          }
+        } else {
+          await api.createRule({ stage: 'pre', conditionsOp: 'or', conditions: [{ field: 'notes', op: 'contains', value: kw }],
+            actions: [{ field: 'category', op: 'set', value: catId }] });
+          rulesCreated++;
+        }
+        rules = await api.getRules();
+        // config de l'utilisateur (onglet Règles) : ajoute le mot-cle a la categorie du meme nom
+        const cname = norm(catById.get(catId).name);
+        for (const g of cfg0.groups || []) for (const c of g.cats || []) {
+          if (norm(c.name) === cname) { c.kws = c.kws || []; if (!c.kws.some(k => k.toLowerCase() === kwl)) { c.kws.push(kw); cfgChanged = true; } }
+        }
+      }
+      if (cfgChanged) setSetting(uid, 'seedConfig', JSON.stringify(cfg0));
+    }
+    await api.sync();
+    res.json({ ok: true, applied, rulesCreated, rulesUpdated, warnings, errors });
   } catch (e) { console.error('[erreur]', e?.message || e); res.status(500).json({ ok: false, error: String(e?.message || e) }); }
   finally { busy = false; }
 });

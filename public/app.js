@@ -44,7 +44,7 @@ async function loadSettings(){
   $('s_url').value=d.serverURL||''; $('s_sync').value=d.syncId||''; $('s_budget').value=d.budgetName||'';
   $('s_pw').placeholder = d.hasPassword?'(inchangé)':'(vide)'; $('s_e2e').placeholder = d.hasE2e?'(inchangé)':'(vide)';
   try { ALIASES = JSON.parse(d.aliases||'{}'); } catch { ALIASES={}; }
-  renderAliases(); fetchAccounts(); loadSeedConfig();
+  renderAliases(); fetchAccounts(); loadSeedConfig(); fillAiSettings(d);
   if(IS_ADMIN){ loadUsers(); loadLocks(); loadNtfy(); }
 }
 $('s_save').onclick = async () => {
@@ -416,4 +416,234 @@ function render(d){
     } catch(e){ alert('Erreur : '+e.message); b.disabled=false; b.textContent='Créer le compte'; }
   });
 }
+// ============================================================================
+//  IA locale (sur le PC de l'utilisateur) : réglages + appel depuis le navigateur
+// ============================================================================
+let AI = { provider:'ollama', url:'http://localhost:11434', model:'' };
+function fillAiSettings(d){
+  AI = { provider:d.aiProvider||'ollama', url:d.aiUrl||'http://localhost:11434', model:d.aiModel||'' };
+  $('ai_provider').value = AI.provider; $('ai_url').value = AI.url;
+  setModelOptions(AI.model ? [AI.model] : [], AI.model);
+  $('ai_origin').textContent = location.origin;
+}
+async function loadAiSettings(){
+  try { const d = await (await fetch('/api/settings')).json(); if(d.ok) AI = { provider:d.aiProvider||'ollama', url:d.aiUrl||'http://localhost:11434', model:d.aiModel||'' }; } catch {}
+  return AI;
+}
+function setModelOptions(list, selected){
+  const sel = $('ai_model');
+  sel.innerHTML = list.length ? list.map(m=>`<option value="${esc(m)}">${esc(m)}</option>`).join('') : '<option value="">— clique « Tester » —</option>';
+  if(selected && list.includes(selected)) sel.value = selected;
+}
+$('ai_provider').onchange = () => {
+  const u = $('ai_url').value.trim();
+  if(!u || /localhost:(11434|1234)\/?$/.test(u)) $('ai_url').value = $('ai_provider').value==='openai' ? 'http://localhost:1234' : 'http://localhost:11434';
+};
+// Base d'URL sans « / » final ni « /v1 » (on ajoute le chemin nous-mêmes)
+function aiBase(url){ return String(url||'').trim().replace(/\/+$/,'').replace(/\/v1$/,''); }
+// Chrome (« Local Network Access ») : pour une IA sur un AUTRE PC du réseau, il faut annoncer la cible.
+function aiFetch(url, opts={}){
+  let o = { ...opts };
+  try { const h = new URL(url).hostname; if(!/^(localhost|127\.0\.0\.1|\[::1\])$/.test(h)) o.targetAddressSpace = 'local'; } catch {}
+  return fetch(url, o);
+}
+function aiNetError(e){
+  if(e && e.name === 'TypeError') return `IA injoignable à ${aiBase(AI.url)}. Vérifie qu'elle est lancée sur CE PC et que OLLAMA_ORIGINS contient ${location.origin} (voir Paramètres → IA locale).`;
+  return e?.message || String(e);
+}
+async function aiListModels(cfg){
+  const base = aiBase(cfg.url);
+  if(cfg.provider === 'openai'){
+    const r = await aiFetch(base + '/v1/models'); if(!r.ok) throw new Error('HTTP '+r.status);
+    return ((await r.json()).data||[]).map(m=>m.id);
+  }
+  const r = await aiFetch(base + '/api/tags'); if(!r.ok) throw new Error('HTTP '+r.status);
+  return ((await r.json()).models||[]).map(m=>m.name);
+}
+$('ai_test').onclick = async () => {
+  const cfg = { provider:$('ai_provider').value, url:$('ai_url').value };
+  $('ai_msg').textContent = 'Test…';
+  try {
+    const models = await aiListModels(cfg);
+    const cur = $('ai_model').value || AI.model;
+    setModelOptions(models, cur);
+    $('ai_msg').innerHTML = models.length ? `<span class="tag-ok">IA joignable ✓</span> ${models.length} modèle(s)` : '<span class="tag-skip">IA joignable, mais aucun modèle installé (ollama pull qwen2.5:3b)</span>';
+  } catch(e){ AI.url = cfg.url; $('ai_msg').innerHTML = `<span class="tag-no">${esc(aiNetError(e))}</span>`; }
+};
+$('ai_save').onclick = async () => {
+  const body = { aiProvider:$('ai_provider').value, aiUrl:$('ai_url').value, aiModel:$('ai_model').value };
+  const d = await (await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+  if(d.ok){ AI = { provider:body.aiProvider, url:body.aiUrl.trim().replace(/\/+$/,''), model:body.aiModel }; }
+  $('ai_msg').textContent = d.ok ? 'Enregistré ✓' : ('Erreur : '+d.error);
+};
+
+// Demande UNE catégorie à l'IA. Réponse contrainte (JSON + liste fermée) -> pas d'invention.
+async function aiClassify(item, cats){
+  const labelOf = (c) => c.group ? `${c.group} › ${c.name}` : c.name;
+  const labels = cats.map(labelOf);
+  const byLabel = new Map(cats.map(c=>[labelOf(c), c.id]));
+  const byId = new Map(cats.map(c=>[c.id, c]));
+  const eur = (cents) => (cents/100).toLocaleString('fr-FR',{minimumFractionDigits:2}) + ' €';
+  const ex = (item.examples||[]).filter(e=>byId.has(e.category))
+    .map(e=>`- ${e.text}${e.amount!=null?` (${eur(e.amount)})`:''} → ${labelOf(byId.get(e.category))}`).join('\n');
+  const schema = { type:'object', properties:{ categorie:{ type:'string', enum:labels }, confiance:{ type:'number' } }, required:['categorie','confiance'] };
+  const messages = [
+    { role:'system', content:"Tu classes des opérations bancaires françaises dans les catégories du budget personnel de l'utilisateur. "
+      + "Tu choisis UNIQUEMENT une catégorie de la liste fournie, en recopiant son nom exactement. "
+      + "Les exemples viennent de l'historique de l'utilisateur : ils montrent SES habitudes, suis-les en priorité. "
+      + "Un montant positif est un crédit (revenu ou remboursement). Réponds uniquement en JSON." },
+    { role:'user', content:
+      `Catégories disponibles :\n${cats.map(c=>'- '+labelOf(c)+(c.income?' (revenu)':'')).join('\n')}\n\n`
+      + (ex ? `Exemples de l'historique (libellé → catégorie) :\n${ex}\n\n` : '')
+      + `Opération à classer :\nDate : ${item.date}\nMontant : ${eur(item.amount)}\nBénéficiaire : ${item.payeeName||'(inconnu)'}\nLibellé : ${item.notes||'(vide)'}\n\n`
+      + 'Réponds {"categorie": "<nom exact de la liste>", "confiance": <nombre entre 0 et 1>}.' },
+  ];
+  const base = aiBase(AI.url);
+  let content;
+  if(AI.provider === 'openai'){
+    const r = await aiFetch(base + '/v1/chat/completions', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ model:AI.model, temperature:0, messages, response_format:{ type:'json_schema', json_schema:{ name:'categorie', strict:true, schema } } }) });
+    if(!r.ok) throw new Error('IA : HTTP '+r.status);
+    content = (await r.json()).choices?.[0]?.message?.content;
+  } else {
+    const r = await aiFetch(base + '/api/chat', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ model:AI.model, stream:false, format:schema, options:{ temperature:0 }, messages }) });
+    if(!r.ok) throw new Error('IA : HTTP '+r.status+(r.status===404?' (modèle introuvable ?)':''));
+    content = (await r.json()).message?.content;
+  }
+  let out; try { out = JSON.parse(content||'{}'); } catch { return null; }
+  const id = byLabel.get(String(out.categorie||'').trim());
+  if(!id) return null;
+  let conf = Number(out.confiance); if(!(conf>=0 && conf<=1)) conf = 0.5;
+  return { category:id, source:'ia', confidence: Math.round(conf*100)/100 };
+}
+
+// ============================================================================
+//  Suggestions de catégories (historique + IA locale) — rien n'est écrit sans « Appliquer »
+// ============================================================================
+let SG = { items:[], categories:[] }, SG_STOP = false;
+const PRECHECK = 0.8;          // suggestion cochée d'office à partir de 80 %
+const AI_BELOW = 0.6;          // l'IA traite ce qui est sous 60 % (ou tout, si coché)
+function sgKeyword(it){
+  const p = String(it.payeeName||'').trim(), n = String(it.notes||'');
+  if(p.length >= 3 && n.toLowerCase().includes(p.toLowerCase())) return p;
+  const words = n.normalize('NFD').replace(/[̀-ͯ]/g,'').toUpperCase().replace(/[^A-Z]+/g,' ').split(' ')
+    .filter(w=>w.length>=3 && !/^(CB|CARTE|PAIEMENT|PRLV|SEPA|VIR|VIREMENT|FACTURE|ACHAT|RETRAIT|DAB|ECH|REF|MANDAT|INST|RECU|EMIS|DES|DU|DE|LE|LA|LES|POUR|PAR|SUR)$/.test(w));
+  return words.slice(0,2).join(' ') || p;
+}
+function srcBadge(s){
+  if(!s) return '<span class="src man">aucune</span>';
+  const pct = s.confidence!=null ? ' '+Math.round(s.confidence*100)+' %' : '';
+  if(s.source==='manuel') return '<span class="src man">ton choix</span>';
+  if(s.source==='ia') return `<span class="src ia" title="Suggestion de l'IA locale">IA${pct}</span>`;
+  const lbl = { beneficiaire:'même bénéficiaire', libelle:'même libellé', mots:'mots proches' }[s.source] || 'historique';
+  return `<span class="src ${s.confidence>=PRECHECK?'hist':'low'}" title="Historique : ${esc(lbl)} (${s.support||0} op.)">${esc(lbl)}${pct}</span>`;
+}
+function catOptions(selected){
+  const groups = new Map();
+  for(const c of SG.categories){ if(!groups.has(c.group)) groups.set(c.group, []); groups.get(c.group).push(c); }
+  let h = `<option value="">— choisir —</option>`;
+  for(const [g, cs] of groups){
+    h += `<optgroup label="${esc(g||'Sans groupe')}">` + cs.map(c=>`<option value="${esc(c.id)}"${c.id===selected?' selected':''}>${esc(c.name)}</option>`).join('') + '</optgroup>';
+  }
+  return h;
+}
+function renderSuggestions(){
+  const rows = SG.items;
+  $('sgBar').style.display = rows.length ? '' : 'none';
+  if(!rows.length){ $('sgTable').innerHTML = ''; return; }
+  let h = '<tr><th></th><th>Date</th><th>Montant</th><th>Opération</th><th>Catégorie</th><th>Source</th><th>Règle</th></tr>';
+  rows.forEach((it, i)=>{
+    const s = it.suggestion, cat = it.chosen ?? s?.category ?? '';
+    const checked = it.checked ?? (!!s && s.confidence >= PRECHECK);
+    it.checked = checked;
+    const amt = (it.amount/100).toLocaleString('fr-FR',{minimumFractionDigits:2});
+    h += `<tr data-i="${i}">
+      <td><input type="checkbox" class="sgChk"${checked?' checked':''}></td>
+      <td class="mini" style="white-space:nowrap">${esc(it.date||'')}<div>${esc(it.account||'')}</div></td>
+      <td style="white-space:nowrap" class="${it.amount>0?'amt-pos':'amt-neg'}">${esc(amt)} €</td>
+      <td><b>${esc(it.payeeName||'')}</b><div class="mini">${esc(it.notes||'')}</div></td>
+      <td><select class="sgCat">${catOptions(cat)}</select></td>
+      <td>${srcBadge(it.chosen && it.chosen!==s?.category ? {source:'manuel'} : s)}</td>
+      <td><label class="chk mini" title="Ajoute ce mot-clé à la règle de la catégorie dans Actual : les prochaines opérations seront classées dès l'import"><input type="checkbox" class="sgRule"${it.rule?' checked':''}> créer</label>
+        <input type="text" class="kw sgKw" value="${esc(it.keyword ?? sgKeyword(it))}" style="${it.rule?'':'display:none'}" placeholder="mot-clé du libellé"></td>
+    </tr>`;
+  });
+  $('sgTable').innerHTML = h;
+}
+$('sgTable').addEventListener('change', e=>{
+  const tr = e.target.closest('tr[data-i]'); if(!tr) return;
+  const it = SG.items[+tr.dataset.i];
+  if(e.target.classList.contains('sgChk')) it.checked = e.target.checked;
+  else if(e.target.classList.contains('sgCat')){ it.chosen = e.target.value; it.checked = !!e.target.value; renderSuggestions(); }
+  else if(e.target.classList.contains('sgRule')){ it.rule = e.target.checked; if(it.rule && it.keyword==null) it.keyword = sgKeyword(it); if(it.rule) it.checked = true; renderSuggestions(); }
+});
+$('sgTable').addEventListener('input', e=>{
+  if(!e.target.classList.contains('sgKw')) return;
+  SG.items[+e.target.closest('tr[data-i]').dataset.i].keyword = e.target.value;
+});
+$('sgCheckAll').onclick = ()=>{
+  const all = SG.items.every(it=>it.checked || !(it.chosen ?? it.suggestion?.category));
+  SG.items.forEach(it=>{ if(it.chosen ?? it.suggestion?.category) it.checked = !all; });
+  renderSuggestions();
+};
+$('sgLoad').onclick = async ()=>{
+  const b = $('sgLoad'); b.disabled = true; b.textContent = 'Analyse…';
+  $('sgMsg').textContent = 'Lecture de ton historique dans Actual…';
+  try {
+    const d = await (await fetch('/api/suggest?months='+encodeURIComponent($('sgMonths').value))).json();
+    if(!d.ok) throw new Error(d.error);
+    SG = { items:d.items, categories:d.categories };
+    const more = d.total > d.items.length ? ` (les ${d.items.length} plus récentes affichées)` : '';
+    $('sgMsg').innerHTML = d.items.length
+      ? `<b>${d.total}</b> opération(s) à classer${more} · <span class="tag-ok">${d.withSuggestion} suggestion(s) par l'historique</span> · appris sur ${d.learned} opération(s) déjà classées.`
+      : `<span class="tag-ok">Rien à classer ✓</span> (appris sur ${d.learned} opération(s)).`;
+    renderSuggestions();
+  } catch(e){ $('sgMsg').innerHTML = `<span class="tag-no">Erreur : ${esc(e.message)}</span>`; }
+  finally { b.disabled = false; b.textContent = 'Analyser'; }
+};
+$('sgAI').onclick = async ()=>{
+  await loadAiSettings();
+  if(!AI.model){ $('sgMsg').innerHTML = '<span class="tag-skip">Configure d\'abord ton IA : Paramètres → IA locale (Tester, choisir le modèle, Enregistrer).</span>'; return; }
+  const all = $('sgAIAll').checked;
+  const todo = SG.items.filter(it=>!it.chosen && (all || !it.suggestion || it.suggestion.confidence < AI_BELOW));
+  if(!todo.length){ $('sgMsg').textContent = 'Aucune opération à soumettre à l\'IA (coche « aussi les suggestions déjà fiables » pour tout repasser).'; return; }
+  SG_STOP = false; $('sgAI').disabled = true; $('sgAIStop').style.display = '';
+  let done = 0, got = 0, t0 = Date.now();
+  try {
+    for(const it of todo){
+      if(SG_STOP) break;
+      $('sgMsg').textContent = `IA (${AI.model}) : ${done}/${todo.length}…` + (done ? ` ~${Math.round((Date.now()-t0)/done/100)/10} s/op.` : '');
+      const r = await aiClassify(it, SG.categories);
+      done++;
+      if(r){ got++; it.suggestion = { ...r, support:0 }; it.checked = r.confidence >= PRECHECK; }
+      if(done % 5 === 0) renderSuggestions();
+    }
+    $('sgMsg').innerHTML = `<span class="tag-ok">IA : ${got} suggestion(s)</span> sur ${done} opération(s)${SG_STOP?' (arrêté)':''}. Vérifie, puis « Appliquer la sélection ».`;
+  } catch(e){ $('sgMsg').innerHTML = `<span class="tag-no">${esc(aiNetError(e))}</span>`; }
+  finally { $('sgAI').disabled = false; $('sgAIStop').style.display = 'none'; renderSuggestions(); }
+};
+$('sgAIStop').onclick = ()=>{ SG_STOP = true; };
+$('sgApply').onclick = async ()=>{
+  const sel = SG.items.filter(it=>it.checked && (it.chosen ?? it.suggestion?.category));
+  if(!sel.length){ $('sgMsg').textContent = 'Coche au moins une opération avec une catégorie.'; return; }
+  const items = sel.map(it=>({ id:it.id, category: it.chosen ?? it.suggestion.category }));
+  const rules = sel.filter(it=>it.rule && String(it.keyword||'').trim().length>=3).map(it=>({ category: it.chosen ?? it.suggestion.category, keyword: it.keyword.trim() }));
+  if(!confirm(`Classer ${items.length} opération(s) dans Actual`+(rules.length?` et ajouter ${rules.length} mot(s)-clé(s) aux règles`:'')+' ?')) return;
+  const b = $('sgApply'); b.disabled = true; b.textContent = 'Application…';
+  try {
+    const d = await (await fetch('/api/suggest/apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({items, rules})})).json();
+    if(!d.ok) throw new Error(d.error);
+    const doneIds = new Set(items.map(x=>x.id));
+    SG.items = SG.items.filter(it=>!doneIds.has(it.id));
+    let msg = `<span class="tag-ok">${d.applied} opération(s) classée(s) ✓</span>`;
+    if(d.rulesCreated || d.rulesUpdated) msg += ` · règles : ${d.rulesCreated} créée(s), ${d.rulesUpdated} complétée(s)`;
+    if(d.warnings?.length) msg += `<br><span class="tag-skip">⚠️ Garde-fou : ${d.warnings.map(esc).join(' ; ')}</span>`;
+    if(d.errors?.length) msg += `<br><span class="tag-no">${d.errors.map(esc).join(' ; ')}</span>`;
+    $('sgMsg').innerHTML = msg;
+    renderSuggestions();
+  } catch(e){ $('sgMsg').innerHTML = `<span class="tag-no">Erreur : ${esc(e.message)}</span>`; }
+  finally { b.disabled = false; b.textContent = 'Appliquer la sélection'; }
+};
+
 function esc(s){ return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }

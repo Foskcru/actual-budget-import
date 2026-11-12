@@ -20,6 +20,7 @@ sans doublon — via l'API officielle d'Actual.
 - 📅 Gère les **deux formats** d'export Sumeria (ancien et récent), dates `JJ/MM` → année déduite de la période
 - 💶 Débits en négatif, crédits en positif ; **bénéficiaire** extrait proprement du libellé (commerçant), libellé complet conservé dans **Notes**
 - 🏷️ **Catégorisation auto** : bouton pour créer un jeu de règles de départ, appliqué à chaque import
+- 💡 **Suggestions de catégories** : pour les opérations sans catégorie, propose une catégorie d'après **ton historique** (même bénéficiaire, même libellé, mots proches), puis, en option, d'après une **IA locale installée sur ton PC** (Ollama / LM Studio). Tu valides, et tu peux transformer un choix en **règle Actual**.
 
 ## Déploiement (Docker / Dockge)
 
@@ -78,6 +79,7 @@ Elles servent seulement de **valeurs par défaut** au tout premier démarrage (p
 | `COOKIE_SECURE` | `true` si l'app est servie en **HTTPS** (cookie `Secure` + HSTS). Laisser `false`/absent en HTTP local. |
 | `NTFY_URL` | Optionnel : URL d'un topic **ntfy** pour être alerté quand un compte se bloque (8 échecs). |
 | `NTFY_TOKEN` | Optionnel : jeton d'authentification ntfy (si le topic est protégé). |
+| `AI_CONNECT_SRC` | Optionnel : adresses d'IA **en plus de `localhost`** que le navigateur a le droit d'appeler (CSP), séparées par des espaces. Ex. `http://192.168.1.20:11434` si l'IA tourne sur un autre PC du réseau. |
 
 ### Résumé sécurité
 - Auth par session (scrypt + cookie `HttpOnly`/`SameSite=Lax`), rate-limiting des connexions, en-têtes CSP/anti-clickjacking.
@@ -85,7 +87,28 @@ Elles servent seulement de **valeurs par défaut** au tout premier démarrage (p
 - Voir `../RAPPORT-SECURITE.md` pour l'analyse complète.
 
 > ⚠️ La version de l'API (`@actual-app/api`) doit correspondre à celle de ton serveur Actual.
-> Ce dépôt cible **26.8.1** — adapte `package.json` + rebuild si tu mets Actual à jour.
+> Ce dépôt cible **26.9.0** — adapte `package.json` + rebuild si tu mets Actual à jour.
+
+## Suggestions de catégories & IA locale
+
+Carte **« Suggestions de catégories »** → **Analyser** : l'app lit les opérations déjà classées de ton budget
+(24 mois), apprend tes habitudes et propose une catégorie pour chaque opération **sans catégorie** (ou rangée
+dans le garde-fou « À vérifier »). Rien n'est écrit avant **« Appliquer la sélection »**. Les suggestions sûres
+(≥ 80 %) sont cochées d'office.
+
+**L'IA apprend de tes choix** : chaque catégorie validée rejoint l'historique, qui sert à la fois au moteur
+de suggestions et d'**exemples** donnés à l'IA (ses opérations les plus proches dans *ton* historique).
+Pas de réentraînement du modèle : c'est inutile ici, et ça tournerait mal sur un PC ordinaire.
+Case **« Règle → créer »** : ajoute un mot-clé à la règle de la catégorie dans Actual, ce qui classe les prochaines opérations dès l'import.
+
+**IA locale (facultative, sur le PC de chaque utilisateur, pas sur le NAS)** : c'est le navigateur qui
+interroge l'IA à `http://localhost:11434`. Tes opérations ne quittent pas ton réseau.
+1. Installe [Ollama](https://ollama.com/download), puis `ollama pull qwen2.5:3b` (≈ 2 Go, 8 Go de RAM suffisent).
+2. Autorise l'app : `setx OLLAMA_ORIGINS "https://adresse-de-l-app"` (Windows), puis quitte et relance Ollama.
+3. Dans l'app : **Paramètres → IA locale → Tester → choisir le modèle → Enregistrer**.
+4. Carte Suggestions : **« 🤖 Demander à l'IA locale »** (traite ce que l'historique ne sait pas classer).
+
+LM Studio marche aussi (serveur local, *Enable CORS*, adresse `http://localhost:1234`).
 
 ## Sécurité
 

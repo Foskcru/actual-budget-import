@@ -62,6 +62,16 @@
   .gcaret{cursor:pointer;user-select:none;font-size:12px;width:14px;text-align:center;color:var(--muted)}
   .ghandle,.chandle{cursor:grab;user-select:none;color:var(--muted);font-size:14px}
   .grp.dragging,.cat.dragging{opacity:.45}
+  .sgTable td{padding:6px 5px}
+  .sgTable select{padding:5px 7px;font-size:13px;max-width:210px}
+  .sgTable .kw{padding:5px 7px;font-size:12px;max-width:150px;margin-top:4px}
+  .src{display:inline-block;padding:1px 6px;border-radius:5px;font-size:11px;font-weight:600;white-space:nowrap}
+  .src.hist{background:rgba(47,191,113,.15);color:var(--ok)}
+  .src.ia{background:rgba(79,124,255,.18);color:#8fa9ff}
+  .src.low{background:rgba(224,161,0,.15);color:var(--warn)}
+  .src.man{background:var(--soft);color:var(--muted)}
+  .amt-neg{color:var(--ink)} .amt-pos{color:var(--ok)}
+  ol.guide{margin:6px 0 0 18px;padding:0} ol.guide li{margin:4px 0}
 </style>
 </head>
 <body>
@@ -88,6 +98,7 @@
         <button class="tab active" data-tab="conn">Connexion</button>
         <button class="tab" data-tab="accts">Comptes</button>
         <button class="tab" data-tab="rules">Règles</button>
+        <button class="tab" data-tab="ai">IA locale</button>
         <button class="tab" data-tab="pwd">Mon compte</button>
         <button class="tab" id="tabAdmin" data-tab="admin" style="display:none">Admin</button>
       </div>
@@ -146,6 +157,36 @@
             <button class="ghost" id="seedReset">Réinitialiser au modèle par défaut</button>
             <span id="seedMsg" class="mini"></span>
           </div>
+        </div>
+
+        <div class="tabpane" data-pane="ai" style="display:none">
+          <b>IA locale (sur ton PC)</b>
+          <div class="mini" style="margin:2px 0 10px">
+            Facultatif. L'IA tourne <b>sur ton ordinateur</b> (pas sur le NAS) : c'est ton navigateur qui l'interroge, et tes opérations ne quittent pas ton réseau.
+            Elle sert pour les libellés que l'historique ne sait pas classer. Réglage propre à ton compte ; sur un PC sans IA, le bouton est simplement indisponible.
+          </div>
+          <div class="grid2">
+            <div><label class="mini">Logiciel</label>
+              <select id="ai_provider"><option value="ollama">Ollama</option><option value="openai">LM Studio / compatible OpenAI</option></select></div>
+            <div><label class="mini">Adresse</label><input type="text" id="ai_url" placeholder="http://localhost:11434"></div>
+            <div><label class="mini">Modèle</label><select id="ai_model"><option value="">— clique « Tester » —</option></select></div>
+          </div>
+          <div class="row" style="gap:8px;margin-top:12px">
+            <button class="ghost" id="ai_test">Tester</button>
+            <button id="ai_save">Enregistrer</button>
+            <span id="ai_msg" class="mini"></span>
+          </div>
+          <details style="margin-top:14px">
+            <summary class="mini" style="cursor:pointer"><b>Installer l'IA sur Windows (Ollama) — pas à pas</b></summary>
+            <ol class="guide mini">
+              <li>Télécharge et installe <b>Ollama</b> depuis <code>ollama.com/download</code>.</li>
+              <li>Ouvre un terminal (PowerShell) et télécharge un modèle : <code>ollama pull qwen2.5:3b</code> (≈ 2 Go, 8 Go de RAM suffisent). Plus précis mais plus lourd : <code>qwen2.5:7b</code>.</li>
+              <li>Autorise cette app à parler à Ollama : <code>setx OLLAMA_ORIGINS "<span id="ai_origin"></span>"</code></li>
+              <li>Quitte Ollama (icône près de l'horloge → <i>Quit</i>) puis relance-le, pour qu'il prenne le réglage.</li>
+              <li>Reviens ici : <b>Tester</b> → choisis le modèle → <b>Enregistrer</b>. Si Chrome demande d'« accéder aux appareils du réseau local », clique <b>Autoriser</b>.</li>
+            </ol>
+            <div class="mini" style="margin-top:6px"><b>LM Studio</b> : onglet <i>Developer</i> → démarre le serveur et coche <i>Enable CORS</i> ; adresse <code>http://localhost:1234</code>.</div>
+          </details>
         </div>
 
         <div class="tabpane" data-pane="pwd" style="display:none">
@@ -229,6 +270,29 @@
     </div>
     <div id="catsRes" class="mini" style="margin-top:10px"></div>
     <div id="rulesRes" class="mini" style="margin-top:6px"></div>
+  </div>
+
+  <div class="card">
+    <div class="row" style="justify-content:space-between">
+      <b>Suggestions de catégories</b>
+      <div class="row" style="gap:8px">
+        <select id="sgMonths" title="Opérations à classer">
+          <option value="3">3 derniers mois</option><option value="12" selected>12 derniers mois</option><option value="36">36 derniers mois</option>
+        </select>
+        <button class="ghost" id="sgLoad">Analyser</button>
+      </div>
+    </div>
+    <div class="mini" style="margin-top:2px">Repère les opérations <b>sans catégorie</b> (ou en garde-fou) et propose une catégorie d'après <b>ton historique</b>, puis, si tu veux, d'après ton <b>IA locale</b>. Rien n'est écrit tant que tu ne cliques pas « Appliquer ». Chaque choix validé enrichit l'historique : les suggestions suivantes s'améliorent toutes seules.</div>
+    <div id="sgBar" class="row" style="gap:8px;margin-top:10px;display:none">
+      <button class="ghost" id="sgAI">🤖 Demander à l'IA locale</button>
+      <button class="ghost" id="sgAIStop" style="display:none">Arrêter</button>
+      <label class="chk mini"><input type="checkbox" id="sgAIAll"> aussi les suggestions déjà fiables</label>
+      <span style="flex:1"></span>
+      <button class="ghost" id="sgCheckAll">Tout cocher</button>
+      <button id="sgApply">Appliquer la sélection</button>
+    </div>
+    <div id="sgMsg" class="mini" style="margin-top:8px"></div>
+    <div style="overflow-x:auto"><table id="sgTable" class="sgTable"></table></div>
   </div>
 
   <div class="card" id="resCard" style="display:none">
