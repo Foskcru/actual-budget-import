@@ -110,6 +110,15 @@ interroge l'IA à `http://localhost:11434`. Tes opérations ne quittent pas ton 
 
 LM Studio marche aussi (serveur local, *Enable CORS*, adresse `http://localhost:1234`).
 
+**« C'est quoi ? » (commerçants inconnus)** : sous chaque opération, un champ décrit le commerçant
+(ex. *« Camargue Glaco : glacier à Aigues-Mortes »*). Il est rempli par ton IA à partir d'une **recherche web**
+faite depuis le NAS (DuckDuckGo sans clé par défaut, **Brave Search** si tu mets une clé dans Paramètres → IA locale),
+ou à la main. Une seule recherche par commerçant (cache). Seul le **nom nettoyé** du commerçant part sur internet
+(`SUMUP *`, `PAYPAL *`, numéros… retirés) — jamais un montant, une date ou un compte.
+
+Les propositions de l'IA ne sont **jamais cochées d'office** (sa « confiance » n'est pas fiable) ; les **virements
+internes** probables (« Virement interne », porte-monnaie, livret…) sont signalés à part : à relier comme virement dans Actual.
+
 ## Sécurité
 
 Cette page peut **écrire dans ton budget**. Ne l'expose pas en public sans protection :

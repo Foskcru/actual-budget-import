@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { buildModel, suggest, nearestExamples } from './suggest.mjs';
+import { merchantName, merchantKey, looksInternal, searchMerchant } from './websearch.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Version de @actual-app/api embarquee par l'app (a comparer a la version du serveur Actual).
@@ -97,6 +98,16 @@ db.exec(`
     username TEXT, ip TEXT, updated INTEGER
   );
   CREATE TABLE IF NOT EXISTS app_config ( key TEXT PRIMARY KEY, value TEXT );
+  CREATE TABLE IF NOT EXISTS merchant_info (
+    user_id INTEGER NOT NULL,
+    mkey TEXT NOT NULL,          -- cle normalisee du commercant
+    name TEXT,                   -- nom nettoye (celui recherche)
+    description TEXT,            -- « C'est quoi ? » (redige par l'IA ou saisi a la main)
+    snippets TEXT,               -- JSON des extraits web (evite de rechercher 2 fois)
+    source TEXT,                 -- 'web+ia' | 'web' | 'manuel' | 'ia'
+    updated INTEGER,
+    PRIMARY KEY (user_id, mkey)
+  );
 `);
 // Colonne "disabled" (compte desactive par un admin) : ajout si absente
 try { db.exec('ALTER TABLE users ADD COLUMN disabled INTEGER DEFAULT 0'); } catch {}
@@ -725,6 +736,7 @@ app.delete('/api/users/:id', requireAuth, requireAdmin, (req, res) => {
   if (id === req.user.userId) return res.status(400).json({ ok: false, error: 'Impossible de te supprimer toi-meme.' });
   db.prepare('DELETE FROM users WHERE id=?').run(id);
   db.prepare('DELETE FROM user_settings WHERE user_id=?').run(id); // F2 : pas de secrets orphelins
+  db.prepare('DELETE FROM merchant_info WHERE user_id=?').run(id);
   res.json({ ok: true });
 });
 
@@ -739,6 +751,7 @@ app.get('/api/settings', requireAuth, (req, res) => {
     aiProvider: getSetting(req.user.userId, 'aiProvider', 'ollama'),
     aiUrl: getSetting(req.user.userId, 'aiUrl', 'http://localhost:11434'),
     aiModel: getSetting(req.user.userId, 'aiModel', ''),
+    hasBraveKey: !!getSecret(req.user.userId, 'braveKey'),
   });
 });
 app.post('/api/settings', requireAuth, (req, res) => {
@@ -758,7 +771,9 @@ app.post('/api/settings', requireAuth, (req, res) => {
     setSetting(uid, 'aiUrl', u);
   }
   if (b.aiModel !== undefined) setSetting(uid, 'aiModel', String(b.aiModel).trim().slice(0, 120));
-  if (b.aiProvider !== undefined || b.aiUrl !== undefined || b.aiModel !== undefined) {
+  if (b.braveKey) setSecret(uid, 'braveKey', String(b.braveKey).trim().slice(0, 200));
+  if (b.clearBrave) setSetting(uid, 'braveKey', '');
+  if (b.aiProvider !== undefined || b.aiUrl !== undefined || b.aiModel !== undefined || b.braveKey || b.clearBrave) {
     if (b.serverURL === undefined && b.password === undefined && b.syncId === undefined && b.budgetName === undefined && !b.e2ePassword) return res.json({ ok: true }); // reglage IA seul : pas besoin de reconnecter Actual
   }
   initedWith = null; // force une reconnexion avec les nouveaux reglages
@@ -1114,16 +1129,23 @@ app.get('/api/suggest', requireAuth, async (req, res) => {
     }
     const model = buildModel(history);
     pending.sort((x, y) => (y.date || '').localeCompare(x.date || ''));
-    const items = pending.slice(0, SUGGEST_MAX_ITEMS).map(t => ({
-      id: t.id, account: t.account, date: t.date, amount: t.amount, payeeName: t.payeeName, notes: t.notes,
-      current: t.category && catIds.has(t.category) ? t.category : null,
-      suggestion: suggest(model, t),
-      examples: nearestExamples(model, t, 8),
-    }));
+    const infoStmt = db.prepare('SELECT description, source FROM merchant_info WHERE user_id=? AND mkey=?');
+    const items = pending.slice(0, SUGGEST_MAX_ITEMS).map(t => {
+      const internal = looksInternal(t.payeeName, t.notes);       // virement entre ses comptes : pas de categorie
+      const merchant = internal ? '' : merchantName(t.payeeName, t.notes);
+      const info = merchant ? infoStmt.get(req.user.userId, merchantKey(merchant)) : null;
+      return {
+        id: t.id, account: t.account, date: t.date, amount: t.amount, payeeName: t.payeeName, notes: t.notes,
+        current: t.category && catIds.has(t.category) ? t.category : null,
+        internal, merchant, merchantInfo: info?.description || '', merchantSource: info?.source || '',
+        suggestion: internal ? null : suggest(model, t),
+        examples: internal ? [] : nearestExamples(model, t, 8),
+      };
+    });
     const categories = cats.filter(c => !c.hidden && c.id !== conflictId)
       .map(c => ({ id: c.id, name: c.name, group: groupName.get(c.group_id) || '', income: !!c.is_income }));
     res.json({ ok: true, months, categories, conflictId, items, total: pending.length, learned: model.n,
-      withSuggestion: items.filter(i => i.suggestion).length });
+      withSuggestion: items.filter(i => i.suggestion).length, internal: items.filter(i => i.internal).length });
   } catch (e) { console.error('[erreur]', e?.message || e); res.status(500).json({ ok: false, error: String(e?.message || e) }); }
   finally { busy = false; }
 });
@@ -1194,6 +1216,39 @@ app.post('/api/suggest/apply', requireAuth, async (req, res) => {
     res.json({ ok: true, applied, rulesCreated, rulesUpdated, warnings, errors });
   } catch (e) { console.error('[erreur]', e?.message || e); res.status(500).json({ ok: false, error: String(e?.message || e) }); }
   finally { busy = false; }
+});
+
+// ============================ « C'est quoi ? » (commercants) ============================
+// Recherche web d'un commercant (DuckDuckGo, ou Brave si cle). Cache par utilisateur :
+// on ne cherche jamais deux fois le meme nom. Seul le NOM nettoye part sur internet.
+const cleanMerchantInput = (v) => String(v || '').replace(/[\r\n\t]+/g, ' ').trim().slice(0, 80);
+app.post('/api/merchant/search', requireAuth, async (req, res) => {
+  const uid = req.user.userId;
+  const name = cleanMerchantInput(req.body?.name);
+  const key = merchantKey(name);
+  if (key.length < 3) return res.status(400).json({ ok: false, error: 'Nom de commerçant trop court.' });
+  const row = db.prepare('SELECT snippets FROM merchant_info WHERE user_id=? AND mkey=?').get(uid, key);
+  if (row?.snippets && !req.body?.force) { try { return res.json({ ok: true, cached: true, results: JSON.parse(row.snippets) }); } catch {} }
+  try {
+    const { results, provider } = await searchMerchant(name, { braveKey: getSecret(uid, 'braveKey') });
+    db.prepare(`INSERT INTO merchant_info(user_id,mkey,name,snippets,updated) VALUES(?,?,?,?,?)
+      ON CONFLICT(user_id,mkey) DO UPDATE SET name=excluded.name, snippets=excluded.snippets, updated=excluded.updated`)
+      .run(uid, key, name, JSON.stringify(results), Date.now());
+    res.json({ ok: true, cached: false, provider, results });
+  } catch (e) { res.status(502).json({ ok: false, error: String(e?.message || e) }); }
+});
+// Enregistre / corrige la description « C'est quoi ? » d'un commercant (vide = efface)
+app.post('/api/merchant', requireAuth, (req, res) => {
+  const uid = req.user.userId;
+  const name = cleanMerchantInput(req.body?.name);
+  const key = merchantKey(name);
+  if (key.length < 3) return res.status(400).json({ ok: false, error: 'Nom de commerçant trop court.' });
+  const description = String(req.body?.description || '').replace(/\s+/g, ' ').trim().slice(0, 300);
+  const source = ['web+ia', 'web', 'manuel', 'ia'].includes(req.body?.source) ? req.body.source : 'manuel';
+  db.prepare(`INSERT INTO merchant_info(user_id,mkey,name,description,source,updated) VALUES(?,?,?,?,?,?)
+    ON CONFLICT(user_id,mkey) DO UPDATE SET name=excluded.name, description=excluded.description, source=excluded.source, updated=excluded.updated`)
+    .run(uid, key, name, description, source, Date.now());
+  res.json({ ok: true, description });
 });
 
 app.use(express.static(path.join(__dirname, 'public')));

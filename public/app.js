@@ -425,6 +425,7 @@ function fillAiSettings(d){
   $('ai_provider').value = AI.provider; $('ai_url').value = AI.url;
   setModelOptions(AI.model ? [AI.model] : [], AI.model);
   $('ai_origin').textContent = location.origin;
+  $('ai_brave').value = ''; $('ai_brave').placeholder = d.hasBraveKey ? '(enregistrée — vide pour la garder)' : '(aucune)';
 }
 async function loadAiSettings(){
   try { const d = await (await fetch('/api/settings')).json(); if(d.ok) AI = { provider:d.aiProvider||'ollama', url:d.aiUrl||'http://localhost:11434', model:d.aiModel||'' }; } catch {}
@@ -472,13 +473,39 @@ $('ai_test').onclick = async () => {
 };
 $('ai_save').onclick = async () => {
   const body = { aiProvider:$('ai_provider').value, aiUrl:$('ai_url').value, aiModel:$('ai_model').value };
+  if($('ai_brave').value.trim()) body.braveKey = $('ai_brave').value.trim();
   const d = await (await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
   if(d.ok){ AI = { provider:body.aiProvider, url:body.aiUrl.trim().replace(/\/+$/,''), model:body.aiModel }; }
   $('ai_msg').textContent = d.ok ? 'Enregistré ✓' : ('Erreur : '+d.error);
+  if(d.ok && body.braveKey){ $('ai_brave').value=''; $('ai_brave').placeholder='(enregistrée — vide pour la garder)'; }
 };
 
-// Demande UNE catégorie à l'IA. Réponse contrainte (JSON + liste fermée) -> pas d'invention.
-async function aiClassify(item, cats){
+// Appel « chat » générique, réponse JSON contrainte par un schéma.
+// think:false = les modèles « qui réfléchissent » (Qwen3, gpt-oss…) répondent directement (bien plus rapide).
+let AI_NO_THINK = true;
+async function aiChat(messages, schema){
+  const base = aiBase(AI.url);
+  if(AI.provider === 'openai'){
+    const r = await aiFetch(base + '/v1/chat/completions', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ model:AI.model, temperature:0, messages, response_format:{ type:'json_schema', json_schema:{ name:'reponse', strict:true, schema } } }) });
+    if(!r.ok) throw new Error('IA : HTTP '+r.status);
+    return (await r.json()).choices?.[0]?.message?.content;
+  }
+  const send = (noThink) => aiFetch(base + '/api/chat', { method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ model:AI.model, stream:false, format:schema, options:{ temperature:0 }, messages, ...(noThink ? { think:false } : {}) }) });
+  let r = await send(AI_NO_THINK);
+  if(!r.ok && AI_NO_THINK && r.status === 400){ AI_NO_THINK = false; r = await send(false); } // vieil Ollama / modèle sans option « think »
+  if(!r.ok) throw new Error('IA : HTTP '+r.status+(r.status===404?' (modèle introuvable ?)':''));
+  return (await r.json()).message?.content;
+}
+const parseJSON = (c) => { try { return JSON.parse(c||'{}'); } catch { return {}; } };
+const webBlock = (name, results) => (results||[]).length
+  ? `Résultats d'une recherche web sur « ${name} » (peuvent être hors sujet) :\n` + results.slice(0,5).map(r=>`- ${r.title}${r.snippet?' — '+r.snippet:''}`).join('\n') + '\n\n'
+  : '';
+
+// Demande UNE catégorie (et, si besoin, une description du commerçant) à l'IA.
+// Réponse contrainte (JSON + liste fermée) -> pas de catégorie inventée.
+async function aiClassify(item, cats, web){
   const labelOf = (c) => c.group ? `${c.group} › ${c.name}` : c.name;
   const labels = cats.map(labelOf);
   const byLabel = new Map(cats.map(c=>[labelOf(c), c.id]));
@@ -486,36 +513,39 @@ async function aiClassify(item, cats){
   const eur = (cents) => (cents/100).toLocaleString('fr-FR',{minimumFractionDigits:2}) + ' €';
   const ex = (item.examples||[]).filter(e=>byId.has(e.category))
     .map(e=>`- ${e.text}${e.amount!=null?` (${eur(e.amount)})`:''} → ${labelOf(byId.get(e.category))}`).join('\n');
-  const schema = { type:'object', properties:{ categorie:{ type:'string', enum:labels }, confiance:{ type:'number' } }, required:['categorie','confiance'] };
+  const wantDesc = !!item.merchant && !item.merchantInfo;
+  const props = { categorie:{ type:'string', enum:labels }, confiance:{ type:'number' } };
+  if(wantDesc) props.description = { type:'string' };
+  const schema = { type:'object', properties:props, required:Object.keys(props) };
+  const ctx = item.merchantInfo ? `Ce commerçant (« ${item.merchant} ») est : ${item.merchantInfo}\n\n` : webBlock(item.merchant, web);
   const messages = [
     { role:'system', content:"Tu classes des opérations bancaires françaises dans les catégories du budget personnel de l'utilisateur. "
       + "Tu choisis UNIQUEMENT une catégorie de la liste fournie, en recopiant son nom exactement. "
       + "Les exemples viennent de l'historique de l'utilisateur : ils montrent SES habitudes, suis-les en priorité. "
-      + "Un montant positif est un crédit (revenu ou remboursement). Réponds uniquement en JSON." },
+      + "Un montant positif est un crédit (revenu ou remboursement). "
+      + (wantDesc ? "Le champ « description » est une phrase courte en français disant ce qu'est le commerçant (type de commerce, ville si connue) ; laisse-le VIDE si tu ne sais pas, n'invente jamais. " : '')
+      + "Réponds uniquement en JSON." },
     { role:'user', content:
       `Catégories disponibles :\n${cats.map(c=>'- '+labelOf(c)+(c.income?' (revenu)':'')).join('\n')}\n\n`
       + (ex ? `Exemples de l'historique (libellé → catégorie) :\n${ex}\n\n` : '')
+      + ctx
       + `Opération à classer :\nDate : ${item.date}\nMontant : ${eur(item.amount)}\nBénéficiaire : ${item.payeeName||'(inconnu)'}\nLibellé : ${item.notes||'(vide)'}\n\n`
-      + 'Réponds {"categorie": "<nom exact de la liste>", "confiance": <nombre entre 0 et 1>}.' },
+      + `Réponds {"categorie": "<nom exact de la liste>", "confiance": <nombre entre 0 et 1>${wantDesc?', "description": "<ce qu\'est le commerçant, ou vide>"':''}}.` },
   ];
-  const base = aiBase(AI.url);
-  let content;
-  if(AI.provider === 'openai'){
-    const r = await aiFetch(base + '/v1/chat/completions', { method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ model:AI.model, temperature:0, messages, response_format:{ type:'json_schema', json_schema:{ name:'categorie', strict:true, schema } } }) });
-    if(!r.ok) throw new Error('IA : HTTP '+r.status);
-    content = (await r.json()).choices?.[0]?.message?.content;
-  } else {
-    const r = await aiFetch(base + '/api/chat', { method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ model:AI.model, stream:false, format:schema, options:{ temperature:0 }, messages }) });
-    if(!r.ok) throw new Error('IA : HTTP '+r.status+(r.status===404?' (modèle introuvable ?)':''));
-    content = (await r.json()).message?.content;
-  }
-  let out; try { out = JSON.parse(content||'{}'); } catch { return null; }
+  const out = parseJSON(await aiChat(messages, schema));
   const id = byLabel.get(String(out.categorie||'').trim());
-  if(!id) return null;
   let conf = Number(out.confiance); if(!(conf>=0 && conf<=1)) conf = 0.5;
-  return { category:id, source:'ia', confidence: Math.round(conf*100)/100 };
+  const description = wantDesc ? String(out.description||'').trim().slice(0,300) : '';
+  return { suggestion: id ? { category:id, source:'ia', confidence: Math.round(conf*100)/100 } : null, description };
+}
+// Résume des résultats web en une phrase « C'est quoi ? » (bouton 🔎 d'une ligne)
+async function aiDescribe(name, web){
+  const schema = { type:'object', properties:{ description:{ type:'string' } }, required:['description'] };
+  const out = parseJSON(await aiChat([
+    { role:'system', content:"Tu dis en UNE phrase courte, en français, ce qu'est un commerçant (type de commerce, ville si connue), d'après des résultats de recherche. Si les résultats ne permettent pas de savoir, renvoie une description vide. N'invente rien. Réponds en JSON." },
+    { role:'user', content: webBlock(name, web) + `Commerçant : « ${name} ». Réponds {"description": "..."}.` },
+  ], schema));
+  return String(out.description||'').trim().slice(0,300);
 }
 
 // ============================================================================
@@ -555,16 +585,18 @@ function renderSuggestions(){
   let h = '<tr><th></th><th>Date</th><th>Montant</th><th>Opération</th><th>Catégorie</th><th>Source</th><th>Règle</th></tr>';
   rows.forEach((it, i)=>{
     const s = it.suggestion, cat = it.chosen ?? s?.category ?? '';
-    const checked = it.checked ?? (!!s && s.confidence >= PRECHECK);
+    const checked = it.checked ?? (!!s && s.source !== 'ia' && !it.internal && s.confidence >= PRECHECK);
     it.checked = checked;
     const amt = (it.amount/100).toLocaleString('fr-FR',{minimumFractionDigits:2});
     h += `<tr data-i="${i}">
       <td><input type="checkbox" class="sgChk"${checked?' checked':''}></td>
       <td class="mini" style="white-space:nowrap">${esc(it.date||'')}<div>${esc(it.account||'')}</div></td>
       <td style="white-space:nowrap" class="${it.amount>0?'amt-pos':'amt-neg'}">${esc(amt)} €</td>
-      <td><b>${esc(it.payeeName||'')}</b><div class="mini">${esc(it.notes||'')}</div></td>
+      <td><b>${esc(it.payeeName||'')}</b><div class="mini">${esc(it.notes||'')}</div>
+        ${it.internal ? '<div class="mini tag-skip">↔ Virement entre tes comptes ? Dans Actual, relie-le plutôt comme <b>virement</b> (pas de catégorie).</div>'
+          : it.merchant ? `<div class="what"><input type="text" class="sgWhat" value="${esc(it.merchantInfo||'')}" placeholder="C'est quoi « ${esc(it.merchant)} » ?" title="Ce qu'est ce commerçant (enregistré pour les prochaines fois)"><button class="ghost sgSearch" title="Chercher sur internet ce qu'est « ${esc(it.merchant)} »">🔎</button></div>` : ''}</td>
       <td><select class="sgCat">${catOptions(cat)}</select></td>
-      <td>${srcBadge(it.chosen && it.chosen!==s?.category ? {source:'manuel'} : s)}</td>
+      <td>${it.internal && !it.chosen ? '<span class="src int">virement interne ?</span>' : srcBadge(it.chosen && it.chosen!==s?.category ? {source:'manuel'} : s)}</td>
       <td><label class="chk mini" title="Ajoute ce mot-clé à la règle de la catégorie dans Actual : les prochaines opérations seront classées dès l'import"><input type="checkbox" class="sgRule"${it.rule?' checked':''}> créer</label>
         <input type="text" class="kw sgKw" value="${esc(it.keyword ?? sgKeyword(it))}" style="${it.rule?'':'display:none'}" placeholder="mot-clé du libellé"></td>
     </tr>`;
@@ -577,6 +609,41 @@ $('sgTable').addEventListener('change', e=>{
   if(e.target.classList.contains('sgChk')) it.checked = e.target.checked;
   else if(e.target.classList.contains('sgCat')){ it.chosen = e.target.value; it.checked = !!e.target.value; renderSuggestions(); }
   else if(e.target.classList.contains('sgRule')){ it.rule = e.target.checked; if(it.rule && it.keyword==null) it.keyword = sgKeyword(it); if(it.rule) it.checked = true; renderSuggestions(); }
+});
+// « C'est quoi ? » : description d'un commerçant, partagée par toutes ses lignes
+function setMerchantInfo(merchant, text){
+  const k = merchant.toLowerCase();
+  SG.items.forEach(x=>{ if((x.merchant||'').toLowerCase()===k) x.merchantInfo = text; });
+}
+async function saveMerchantInfo(merchant, description, source){
+  setMerchantInfo(merchant, description);
+  try { await fetch('/api/merchant',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:merchant, description, source})}); } catch {}
+}
+async function webSearch(merchant, force){
+  const d = await (await fetch('/api/merchant/search',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:merchant, force:!!force})})).json();
+  if(!d.ok) throw new Error(d.error);
+  return d.results || [];
+}
+$('sgTable').addEventListener('focusout', e=>{
+  if(!e.target.classList.contains('sgWhat')) return;
+  const it = SG.items[+e.target.closest('tr[data-i]').dataset.i];
+  const v = e.target.value.trim();
+  if(v !== (it.merchantInfo||'')) saveMerchantInfo(it.merchant, v, 'manuel');
+});
+$('sgTable').addEventListener('click', async e=>{
+  const b = e.target.closest('.sgSearch'); if(!b) return;
+  const it = SG.items[+b.closest('tr[data-i]').dataset.i];
+  b.disabled = true; b.textContent = '…';
+  try {
+    const web = await webSearch(it.merchant, true);
+    if(!web.length){ $('sgMsg').textContent = `Rien trouvé sur internet pour « ${it.merchant} ». Tu peux remplir le champ toi-même.`; return; }
+    await loadAiSettings();
+    let desc = '', src = 'web';
+    if(AI.model){ try { desc = await aiDescribe(it.merchant, web); src = 'web+ia'; } catch(err){ $('sgMsg').textContent = aiNetError(err); } }
+    if(!desc){ const r = web[0]; desc = (r.title + (r.snippet ? ' — ' + r.snippet : '')).slice(0,200); src = 'web'; }
+    await saveMerchantInfo(it.merchant, desc, src);
+  } catch(err){ $('sgMsg').innerHTML = `<span class="tag-no">${esc(err.message)}</span>`; }
+  finally { renderSuggestions(); }
 });
 $('sgTable').addEventListener('input', e=>{
   if(!e.target.classList.contains('sgKw')) return;
@@ -598,6 +665,7 @@ $('sgLoad').onclick = async ()=>{
     $('sgMsg').innerHTML = d.items.length
       ? `<b>${d.total}</b> opération(s) à classer${more} · <span class="tag-ok">${d.withSuggestion} suggestion(s) par l'historique</span> · appris sur ${d.learned} opération(s) déjà classées.`
       : `<span class="tag-ok">Rien à classer ✓</span> (appris sur ${d.learned} opération(s)).`;
+    if(d.internal) $('sgMsg').innerHTML += ` · <span class="tag-skip">${d.internal} virement(s) interne(s) probable(s), à relier dans Actual</span>`;
     renderSuggestions();
   } catch(e){ $('sgMsg').innerHTML = `<span class="tag-no">Erreur : ${esc(e.message)}</span>`; }
   finally { b.disabled = false; b.textContent = 'Analyser'; }
@@ -606,7 +674,8 @@ $('sgAI').onclick = async ()=>{
   await loadAiSettings();
   if(!AI.model){ $('sgMsg').innerHTML = '<span class="tag-skip">Configure d\'abord ton IA : Paramètres → IA locale (Tester, choisir le modèle, Enregistrer).</span>'; return; }
   const all = $('sgAIAll').checked;
-  const todo = SG.items.filter(it=>!it.chosen && (all || !it.suggestion || it.suggestion.confidence < AI_BELOW));
+  const todo = SG.items.filter(it=>!it.chosen && !it.internal && (all || !it.suggestion || it.suggestion.confidence < AI_BELOW));
+  const useWeb = $('sgWeb').checked; let webErr = '';
   if(!todo.length){ $('sgMsg').textContent = 'Aucune opération à soumettre à l\'IA (coche « aussi les suggestions déjà fiables » pour tout repasser).'; return; }
   SG_STOP = false; $('sgAI').disabled = true; $('sgAIStop').style.display = '';
   let done = 0, got = 0, t0 = Date.now();
@@ -614,12 +683,18 @@ $('sgAI').onclick = async ()=>{
     for(const it of todo){
       if(SG_STOP) break;
       $('sgMsg').textContent = `IA (${AI.model}) : ${done}/${todo.length}…` + (done ? ` ~${Math.round((Date.now()-t0)/done/100)/10} s/op.` : '');
-      const r = await aiClassify(it, SG.categories);
+      let web = [];
+      if(useWeb && it.merchant && !it.merchantInfo && !webErr){
+        try { web = await webSearch(it.merchant); } catch(err){ webErr = err.message; }   // 1re erreur : on continue sans le web
+      }
+      const r = await aiClassify(it, SG.categories, web);
       done++;
-      if(r){ got++; it.suggestion = { ...r, support:0 }; it.checked = r.confidence >= PRECHECK; }
+      if(r.description) await saveMerchantInfo(it.merchant, r.description, web.length ? 'web+ia' : 'ia');
+      if(r.suggestion){ got++; it.suggestion = { ...r.suggestion, support:0 }; it.checked = false; } // l'IA propose, tu valides
       if(done % 5 === 0) renderSuggestions();
     }
-    $('sgMsg').innerHTML = `<span class="tag-ok">IA : ${got} suggestion(s)</span> sur ${done} opération(s)${SG_STOP?' (arrêté)':''}. Vérifie, puis « Appliquer la sélection ».`;
+    $('sgMsg').innerHTML = `<span class="tag-ok">IA : ${got} suggestion(s)</span> sur ${done} opération(s)${SG_STOP?' (arrêté)':''}. Coche celles qui te conviennent, puis « Appliquer la sélection ».`
+      + (webErr ? `<br><span class="tag-skip">Recherche web interrompue : ${esc(webErr)}</span>` : '');
   } catch(e){ $('sgMsg').innerHTML = `<span class="tag-no">${esc(aiNetError(e))}</span>`; }
   finally { $('sgAI').disabled = false; $('sgAIStop').style.display = 'none'; renderSuggestions(); }
 };
