@@ -11,7 +11,7 @@ COPY package.json ./
 RUN npm install --omit=dev --no-audit --no-fund
 
 # Copier le code
-COPY server.mjs suggest.mjs websearch.mjs ./
+COPY server.mjs suggest.mjs websearch.mjs params.mjs ./
 COPY public ./public
 
 ENV NODE_ENV=production

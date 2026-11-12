@@ -62,6 +62,18 @@ Puis ouvre `http://IP-DU-NAS:8092`.
 
 Utilisateurs et réglages (par utilisateur) sont stockés dans une base **SQLite** (`app.db`) dans le volume `/data` — **pense à le persister**.
 
+### Paramètres de l'application (admin, sans redémarrer)
+Dans **Paramètres → Admin → Paramètres de l'application**, un admin règle pour tout le monde, avec effet immédiat (ni redémarrage, ni reconstruction de l'image) :
+
+| Groupe | Paramètres |
+|---|---|
+| Sécurité | échecs avant blocage (8), durée du blocage (24 h), durée de session (7 j), taille max d'un fichier importé (10 Mo) |
+| IA locale | adresses d'IA autorisées en plus de localhost, type / adresse / modèle d'IA proposés par défaut |
+| Suggestions | confiance minimale, seuil « coché d'office » (80 %), seuil « demander à l'IA » (60 %), historique d'apprentissage (24 mois), opérations max par analyse (500) |
+| Recherche web | activer / désactiver « C'est quoi ? », délai entre deux recherches (1,5 s), clé Brave partagée (chiffrée) |
+
+Priorité : valeur réglée dans l'admin > variable d'environnement (ex. `AI_CONNECT_SRC`) > défaut. « remettre par défaut » efface le réglage. La liste est définie dans `params.mjs`.
+
 ### Variables d'environnement (toutes optionnelles)
 Elles servent seulement de **valeurs par défaut** au tout premier démarrage (pratique pour pré-remplir). Ensuite tout se gère dans l'UI.
 
@@ -79,7 +91,7 @@ Elles servent seulement de **valeurs par défaut** au tout premier démarrage (p
 | `COOKIE_SECURE` | `true` si l'app est servie en **HTTPS** (cookie `Secure` + HSTS). Laisser `false`/absent en HTTP local. |
 | `NTFY_URL` | Optionnel : URL d'un topic **ntfy** pour être alerté quand un compte se bloque (8 échecs). |
 | `NTFY_TOKEN` | Optionnel : jeton d'authentification ntfy (si le topic est protégé). |
-| `AI_CONNECT_SRC` | Optionnel : adresses d'IA **en plus de `localhost`** que le navigateur a le droit d'appeler (CSP), séparées par des espaces. Ex. `http://192.168.1.20:11434` si l'IA tourne sur un autre PC du réseau. |
+| `AI_CONNECT_SRC` | Optionnel (aussi réglable dans l'onglet Admin) : adresses d'IA **en plus de `localhost`** que le navigateur a le droit d'appeler (CSP), séparées par des espaces. Ex. `http://192.168.1.20:11434` si l'IA tourne sur un autre PC du réseau. |
 
 ### Résumé sécurité
 - Auth par session (scrypt + cookie `HttpOnly`/`SameSite=Lax`), rate-limiting des connexions, en-têtes CSP/anti-clickjacking.

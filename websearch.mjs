@@ -93,8 +93,8 @@ export function parseBrave(json, max = 5) {
 // ---------------------------- recherche (réseau) ----------------------------
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36';
 let lastCall = 0;
-async function politeDelay() { // 1 recherche / 1,5 s max : on reste discret (et pas de blocage)
-  const wait = lastCall + 1500 - Date.now();
+async function politeDelay(delayMs = 1500) { // 1 recherche / 1,5 s max par defaut : on reste discret (et pas de blocage)
+  const wait = lastCall + delayMs - Date.now();
   if (wait > 0) await new Promise(r => setTimeout(r, wait));
   lastCall = Date.now();
 }
@@ -105,10 +105,10 @@ async function getText(url, headers) {
 }
 
 /** Cherche un commerçant. -> { results:[{title,snippet,url}], provider } ; lève une Error lisible sinon. */
-export async function searchMerchant(name, { braveKey = '' } = {}) {
+export async function searchMerchant(name, { braveKey = '', delayMs = 1500 } = {}) {
   const q = String(name || '').trim().slice(0, 80);
   if (q.length < 3) throw new Error('Nom trop court pour une recherche.');
-  await politeDelay();
+  await politeDelay(delayMs);
   if (braveKey) {
     const u = 'https://api.search.brave.com/res/v1/web/search?count=5&country=fr&search_lang=fr&q=' + encodeURIComponent(q);
     const r = await getText(u, { 'Accept': 'application/json', 'X-Subscription-Token': braveKey });

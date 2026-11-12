@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { buildModel, suggest, nearestExamples } from './suggest.mjs';
 import { merchantName, merchantKey, looksInternal, searchMerchant } from './websearch.mjs';
+import { PARAMS, PARAM_BY_KEY, validateParam, effectiveParam } from './params.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Version de @actual-app/api embarquee par l'app (a comparer a la version du serveur Actual).
@@ -40,15 +41,9 @@ try {
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const PORT = process.env.PORT || 3000;
 const SECURE_COOKIE = /^(1|true|yes)$/i.test((process.env.COOKIE_SECURE || '').trim().replace(/^["']|["']$/g, '')); // mettre true derriere HTTPS
-const LOCK_MAX = 8;                       // echecs avant blocage
-const LOCK_MS = 24 * 3600 * 1000;         // duree du blocage : 1 jour
+// Seuils de blocage, duree de session, IA, suggestions... : voir params.mjs (modifiables dans l'onglet Admin)
 const NTFY_URL = (process.env.NTFY_URL || '').trim();   // ex https://ntfy.mon-nas/actual-alertes
 const NTFY_TOKEN = (process.env.NTFY_TOKEN || '').trim();
-// IA locale : le NAVIGATEUR de l'utilisateur appelle l'IA installee sur SON PC (localhost).
-// La CSP doit donc l'autoriser. AI_CONNECT_SRC (optionnel) = origines en plus, separees par des espaces
-// (ex. "http://192.168.1.20:11434" si l'IA tourne sur un autre PC du reseau).
-const AI_CONNECT_SRC = ['http://localhost:*', 'http://127.0.0.1:*',
-  ...String(process.env.AI_CONNECT_SRC || '').split(/\s+/).filter(x => /^https?:\/\/[\w.\-\[\]:*]+$/.test(x))].join(' ');
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
 // Chiffrement au repos des secrets (M3) : cle depuis APP_SECRET (hors volume /data).
@@ -123,11 +118,32 @@ const userCount = () => db.prepare('SELECT COUNT(*) c FROM users').get().c;
 // Config globale de l'app (ntfy...) editable par l'admin
 const getApp = (k, def = '') => { const r = db.prepare('SELECT value FROM app_config WHERE key=?').get(k); return r ? r.value : def; };
 const setApp = (k, v) => db.prepare('INSERT INTO app_config(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(k, String(v ?? ''));
-const DEFAULT_NTFY_TPL = 'Compte "{account}" bloque apres {max} echecs de connexion.\nIP : {ip}\nBlocage 24 h (ou deblocage par un admin).';
+// Parametres globaux (params.mjs) : stockes dans app_config sous « param.<cle> », lus via un cache memoire.
+// Pris en compte immediatement, sans redemarrer ni reconstruire l'image.
+const paramCache = new Map();
+function P(key) {
+  if (paramCache.has(key)) return paramCache.get(key);
+  const r = db.prepare('SELECT value FROM app_config WHERE key=?').get('param.' + key);
+  let stored = r ? r.value : undefined;
+  if (PARAM_BY_KEY.get(key)?.type === 'secret' && stored !== undefined) stored = decSecret(stored);
+  const v = effectiveParam(key, stored, process.env);
+  paramCache.set(key, v);
+  return v;
+}
+const isParamSet = (key) => !!db.prepare('SELECT 1 FROM app_config WHERE key=?').get('param.' + key);
+const lockMax = () => P('lockMax');
+const lockMs = () => P('lockHours') * 3600 * 1000;
+const sessionMs = () => P('sessionDays') * 24 * 3600 * 1000;
+// IA locale : le NAVIGATEUR de l'utilisateur appelle l'IA installee sur SON PC (localhost) -> la CSP doit l'autoriser.
+// + origines en plus (parametre « aiConnectSrc », ou variable d'env AI_CONNECT_SRC).
+const aiConnectSrc = () => ['http://localhost:*', 'http://127.0.0.1:*', ...String(P('aiConnectSrc') || '').split(/\s+/).filter(Boolean)].join(' ');
+const DEFAULT_NTFY_TPL = 'Compte "{account}" bloque apres {max} echecs de connexion.\nIP : {ip}\nBlocage {hours} h (ou deblocage par un admin).';
 // Pre-remplit la config ntfy depuis les variables d'env au 1er demarrage
 if (!getApp('ntfyUrl') && NTFY_URL) setApp('ntfyUrl', NTFY_URL);
 if (!getApp('ntfyToken') && NTFY_TOKEN) setApp('ntfyToken', encSecret(NTFY_TOKEN));
 if (!getApp('ntfyTemplate')) setApp('ntfyTemplate', DEFAULT_NTFY_TPL);
+// Ancien message par defaut (24 h en dur) -> nouveau, qui suit la duree reglee
+if (getApp('ntfyTemplate') === DEFAULT_NTFY_TPL.replace('{hours}', '24')) setApp('ntfyTemplate', DEFAULT_NTFY_TPL);
 // Secrets (mot de passe serveur / chiffrement) : chiffres au repos
 const getSecret = (uid, k) => decSecret(getSetting(uid, k));
 const setSecret = (uid, k, v) => setSetting(uid, k, encSecret(v));
@@ -179,7 +195,6 @@ function verifyPassword(pw, stored) {
   } catch { return false; }
 }
 const sessions = new Map(); // token -> { userId, username, isAdmin, exp }
-const SESSION_MS = 7 * 24 * 3600 * 1000;
 // Purge periodique des sessions expirees (F6) + verrous de connexion expires
 setInterval(() => {
   const now = Date.now();
@@ -188,7 +203,7 @@ setInterval(() => {
 }, 3600 * 1000).unref?.();
 function newSession(u) {
   const t = crypto.randomBytes(24).toString('hex');
-  sessions.set(t, { userId: u.id, username: u.username, isAdmin: !!u.is_admin, exp: Date.now() + SESSION_MS });
+  sessions.set(t, { userId: u.id, username: u.username, isAdmin: !!u.is_admin, exp: Date.now() + sessionMs() });
   return t;
 }
 function getCookie(req, name) {
@@ -208,7 +223,7 @@ function requireAdmin(req, res, next) { if (!req.user?.isAdmin) return res.statu
 // Hash bidon pour un temps de reponse constant meme si l'identifiant n'existe pas (F1)
 const DUMMY_HASH = hashPassword('timing-dummy-please-ignore');
 function setSessionCookie(res, token) {
-  res.setHeader('Set-Cookie', `sid=${token}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${SESSION_MS / 1000}${SECURE_COOKIE ? '; Secure' : ''}`);
+  res.setHeader('Set-Cookie', `sid=${token}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${Math.round(sessionMs() / 1000)}${SECURE_COOKIE ? '; Secure' : ''}`);
 }
 function clearSessionCookie(res) {
   res.setHeader('Set-Cookie', `sid=; HttpOnly; Path=/; Max-Age=0${SECURE_COOKIE ? '; Secure' : ''}`);
@@ -218,7 +233,7 @@ function clientIp(req) { return (req.headers['x-forwarded-for'] || '').split(','
 function rlKeys(req, username) { return ['u:' + String(username || '').toLowerCase(), 'ip:' + clientIp(req)]; }
 function rlBlocked(keys) {
   const now = Date.now();
-  return keys.some(k => { const e = db.prepare('SELECT count,reset_at FROM login_locks WHERE key=?').get(k); return e && e.reset_at > now && e.count >= LOCK_MAX; });
+  return keys.some(k => { const e = db.prepare('SELECT count,reset_at FROM login_locks WHERE key=?').get(k); return e && e.reset_at > now && e.count >= lockMax(); });
 }
 // incremente les compteurs ; retourne true si le seuil vient d'etre atteint (transition -> bloque)
 function rlFail(keys, username, ip) {
@@ -227,8 +242,8 @@ function rlFail(keys, username, ip) {
     const e = db.prepare('SELECT count,reset_at FROM login_locks WHERE key=?').get(k);
     const count = (!e || e.reset_at < now) ? 1 : e.count + 1;
     db.prepare('INSERT INTO login_locks(key,count,reset_at,username,ip,updated) VALUES(?,?,?,?,?,?) ON CONFLICT(key) DO UPDATE SET count=excluded.count,reset_at=excluded.reset_at,username=excluded.username,ip=excluded.ip,updated=excluded.updated')
-      .run(k, count, now + LOCK_MS, username, ip, now);
-    if (count === LOCK_MAX) became = true;
+      .run(k, count, now + lockMs(), username, ip, now);
+    if (count === lockMax()) became = true;
   }
   return became;
 }
@@ -238,7 +253,7 @@ function ntfyConf() {
   return { url: getApp('ntfyUrl', ''), token: decSecret(getApp('ntfyToken', '')), template: getApp('ntfyTemplate', DEFAULT_NTFY_TPL) };
 }
 function renderTpl(tpl, username, ip) {
-  return String(tpl || '').replace(/\{account\}/g, username || '?').replace(/\{ip\}/g, ip || '?').replace(/\{max\}/g, String(LOCK_MAX));
+  return String(tpl || '').replace(/\{account\}/g, username || '?').replace(/\{ip\}/g, ip || '?').replace(/\{max\}/g, String(lockMax())).replace(/\{hours\}/g, String(P('lockHours')));
 }
 async function sendNtfy(title, body) {
   const c = ntfyConf();
@@ -619,13 +634,18 @@ app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'no-referrer');
-  res.setHeader('Content-Security-Policy', `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ${AI_CONNECT_SRC}; base-uri 'self'; form-action 'self'; frame-ancestors 'none'`);
+  res.setHeader('Content-Security-Policy', `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ${aiConnectSrc()}; base-uri 'self'; form-action 'self'; frame-ancestors 'none'`);
   if (SECURE_COOKIE) res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
   next();
 });
 app.use(express.json());
-// Uploads en memoire : 10 Mo/fichier, 30 fichiers max (M6)
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024, files: 30 } });
+// Uploads en memoire : taille max reglable (parametre uploadMaxMb, 10 Mo par defaut), 30 fichiers max (M6)
+const uploadFiles = (req, res, next) => multer({ storage: multer.memoryStorage(), limits: { fileSize: P('uploadMaxMb') * 1024 * 1024, files: 30 } })
+  .array('files')(req, res, (err) => {
+    if (!err) return next();
+    const msg = err.code === 'LIMIT_FILE_SIZE' ? `Fichier trop gros (max ${P('uploadMaxMb')} Mo, reglable par un admin).` : String(err.message || err);
+    res.status(400).json({ ok: false, error: msg });
+  });
 
 // --- Auth : setup / login / logout / me ---
 app.get('/api/needs-setup', (_req, res) => res.json({ needsSetup: userCount() === 0 }));
@@ -668,7 +688,7 @@ app.post('/api/logout', (req, res) => {
   res.json({ ok: true });
 });
 
-app.get('/api/me', requireAuth, (req, res) => res.json({ ok: true, username: req.user.username, isAdmin: req.user.isAdmin, apiVersion: API_VERSION }));
+app.get('/api/me', requireAuth, (req, res) => res.json({ ok: true, username: req.user.username, isAdmin: req.user.isAdmin, apiVersion: API_VERSION, config: publicConfig() }));
 
 // Changer son propre mot de passe
 app.post('/api/change-password', requireAuth, (req, res) => {
@@ -696,7 +716,7 @@ app.post('/api/users/:id/disabled', requireAuth, requireAdmin, (req, res) => {
 // Connexions bloquees : lister / debloquer (admin)
 app.get('/api/locks', requireAuth, requireAdmin, (_req, res) => {
   const now = Date.now();
-  const locks = db.prepare('SELECT key,count,reset_at,username,ip FROM login_locks WHERE reset_at>? AND count>=? ORDER BY reset_at DESC').all(now, LOCK_MAX);
+  const locks = db.prepare('SELECT key,count,reset_at,username,ip FROM login_locks WHERE reset_at>? AND count>=? ORDER BY reset_at DESC').all(now, lockMax());
   res.json({ ok: true, locks });
 });
 app.post('/api/unlock', requireAuth, requireAdmin, (req, res) => {
@@ -704,6 +724,43 @@ app.post('/api/unlock', requireAuth, requireAdmin, (req, res) => {
   if (key) db.prepare('DELETE FROM login_locks WHERE key=?').run(String(key));
   else db.exec('DELETE FROM login_locks'); // tout debloquer
   res.json({ ok: true });
+});
+
+// Parametres utiles au navigateur (seuils d'affichage) : lisibles par tout utilisateur connecte
+function publicConfig() {
+  return { suggestPrecheck: P('suggestPrecheck') / 100, suggestAiBelow: P('suggestAiBelow') / 100, webSearch: P('webSearch') === 'on' };
+}
+// Parametres globaux (admin) : lire / enregistrer / remettre par defaut
+app.get('/api/admin/params', requireAuth, requireAdmin, (_req, res) => {
+  res.json({ ok: true, params: PARAMS.map(p => {
+    const set = isParamSet(p.key);
+    const fromEnv = !set && !!p.env && String(process.env[p.env] || '').trim() !== '';
+    const base = { key: p.key, group: p.group, type: p.type, label: p.label, help: p.help || '', unit: p.unit || '',
+      min: p.min, max: p.max, options: p.options, def: p.type === 'secret' ? '' : p.def, custom: set, fromEnv };
+    return p.type === 'secret' ? { ...base, hasValue: !!P(p.key) } : { ...base, value: P(p.key) };
+  }) });
+});
+app.post('/api/admin/params', requireAuth, requireAdmin, (req, res) => {
+  const values = (req.body && typeof req.body.values === 'object' && req.body.values) || {};
+  const reset = Array.isArray(req.body?.reset) ? req.body.reset : [];
+  const toSave = [], errors = [];
+  for (const [k, raw] of Object.entries(values)) {
+    const p = PARAM_BY_KEY.get(k);
+    if (!p) { errors.push(`Paramètre inconnu : ${k}`); continue; }
+    if (p.type === 'secret' && String(raw ?? '').trim() === '') continue;   // champ secret laisse vide = inchange
+    const v = validateParam(k, raw);
+    if (!v.ok) errors.push(v.error); else toSave.push([k, p.type === 'secret' ? encSecret(v.value) : v.value]);
+  }
+  if (reset.some(k => !PARAM_BY_KEY.has(k))) errors.push('Paramètre inconnu dans la remise à zéro.');
+  if (errors.length) return res.status(400).json({ ok: false, error: errors.join(' ') });
+  db.exec('BEGIN');
+  try {
+    for (const [k, v] of toSave) setApp('param.' + k, v);
+    for (const k of reset) db.prepare('DELETE FROM app_config WHERE key=?').run('param.' + k);
+    db.exec('COMMIT');
+  } catch (e) { db.exec('ROLLBACK'); return res.status(500).json({ ok: false, error: String(e?.message || e) }); }
+  paramCache.clear();
+  res.json({ ok: true, saved: toSave.length, reset: reset.length });
 });
 
 // Config ntfy (admin) : lire / enregistrer / tester
@@ -748,9 +805,10 @@ app.get('/api/settings', requireAuth, (req, res) => {
     serverURL: c.serverURL, syncId: c.syncId, budgetName: c.budgetName,
     aliases: JSON.stringify(c.aliases),
     hasPassword: !!c.password, hasE2e: !!c.e2ePassword,   // secrets non renvoyes
-    aiProvider: getSetting(req.user.userId, 'aiProvider', 'ollama'),
-    aiUrl: getSetting(req.user.userId, 'aiUrl', 'http://localhost:11434'),
-    aiModel: getSetting(req.user.userId, 'aiModel', ''),
+    aiProvider: getSetting(req.user.userId, 'aiProvider', '') || P('aiDefaultProvider'),
+    aiUrl: getSetting(req.user.userId, 'aiUrl', '') || P('aiDefaultUrl'),
+    aiModel: getSetting(req.user.userId, 'aiModel', '') || P('aiDefaultModel'),
+    hasBraveShared: !!P('braveKeyGlobal'), webSearch: P('webSearch') === 'on',
     hasBraveKey: !!getSecret(req.user.userId, 'braveKey'),
   });
 });
@@ -829,7 +887,7 @@ app.get('/api/status', requireAuth, async (req, res) => {
   finally { busy = false; }
 });
 
-app.post('/api/run', requireAuth, upload.array('files'), async (req, res) => {
+app.post('/api/run', requireAuth, uploadFiles, async (req, res) => {
   if (busy) return res.status(409).json({ ok: false, error: 'Un traitement est deja en cours.' });
   const dryRun = req.body.dryRun !== 'false';
   const replaceExisting = req.body.replaceExisting === 'true';
@@ -1095,12 +1153,11 @@ app.get('/api/seed-config/from-actual', requireAuth, async (req, res) => {
 // Lit l'historique du budget, apprend (suggest.mjs) et propose une categorie pour chaque
 // operation SANS categorie (ou rangee dans le garde-fou « À vérifier »).
 // Rien n'est ecrit ici : l'utilisateur valide ensuite (POST /api/suggest/apply).
-const SUGGEST_MAX_ITEMS = 500;
 function isoMonthsAgo(months) { const d = new Date(); d.setMonth(d.getMonth() - months); return d.toISOString().slice(0, 10); }
 app.get('/api/suggest', requireAuth, async (req, res) => {
   if (busy) return res.status(409).json({ ok: false, error: 'Un traitement est deja en cours.' });
   const months = Math.min(60, Math.max(1, parseInt(req.query.months, 10) || 12));   // fenetre des operations a classer
-  const learnMonths = Math.max(months, 24);                                           // fenetre d'apprentissage
+  const learnMonths = Math.max(months, P('suggestLearnMonths'));                                           // fenetre d'apprentissage
   busy = true;
   try {
     await openBudget(req.user.userId);
@@ -1130,7 +1187,7 @@ app.get('/api/suggest', requireAuth, async (req, res) => {
     const model = buildModel(history);
     pending.sort((x, y) => (y.date || '').localeCompare(x.date || ''));
     const infoStmt = db.prepare('SELECT description, source FROM merchant_info WHERE user_id=? AND mkey=?');
-    const items = pending.slice(0, SUGGEST_MAX_ITEMS).map(t => {
+    const items = pending.slice(0, P('suggestMaxItems')).map(t => {
       const internal = looksInternal(t.payeeName, t.notes);       // virement entre ses comptes : pas de categorie
       const merchant = internal ? '' : merchantName(t.payeeName, t.notes);
       const info = merchant ? infoStmt.get(req.user.userId, merchantKey(merchant)) : null;
@@ -1138,7 +1195,7 @@ app.get('/api/suggest', requireAuth, async (req, res) => {
         id: t.id, account: t.account, date: t.date, amount: t.amount, payeeName: t.payeeName, notes: t.notes,
         current: t.category && catIds.has(t.category) ? t.category : null,
         internal, merchant, merchantInfo: info?.description || '', merchantSource: info?.source || '',
-        suggestion: internal ? null : suggest(model, t),
+        suggestion: internal ? null : suggest(model, t, { minConfidence: P('suggestMinConfidence') / 100 }),
         examples: internal ? [] : nearestExamples(model, t, 8),
       };
     });
@@ -1229,8 +1286,9 @@ app.post('/api/merchant/search', requireAuth, async (req, res) => {
   if (key.length < 3) return res.status(400).json({ ok: false, error: 'Nom de commerçant trop court.' });
   const row = db.prepare('SELECT snippets FROM merchant_info WHERE user_id=? AND mkey=?').get(uid, key);
   if (row?.snippets && !req.body?.force) { try { return res.json({ ok: true, cached: true, results: JSON.parse(row.snippets) }); } catch {} }
+  if (P('webSearch') !== 'on') return res.status(403).json({ ok: false, error: 'La recherche web est désactivée par l\'administrateur.' });
   try {
-    const { results, provider } = await searchMerchant(name, { braveKey: getSecret(uid, 'braveKey') });
+    const { results, provider } = await searchMerchant(name, { braveKey: getSecret(uid, 'braveKey') || P('braveKeyGlobal'), delayMs: P('webDelayMs') });
     db.prepare(`INSERT INTO merchant_info(user_id,mkey,name,snippets,updated) VALUES(?,?,?,?,?)
       ON CONFLICT(user_id,mkey) DO UPDATE SET name=excluded.name, snippets=excluded.snippets, updated=excluded.updated`)
       .run(uid, key, name, JSON.stringify(results), Date.now());

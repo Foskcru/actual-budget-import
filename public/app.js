@@ -20,6 +20,7 @@ let IS_ADMIN = false, CURRENT_USER = '', APP_API_VER = '';
     const m = await (await fetch('/api/me')).json();
     if(!m.ok){ location.href='/login.html'; return; }
     IS_ADMIN = !!m.isAdmin; CURRENT_USER = m.username; APP_API_VER = m.apiVersion || '';
+    applyPublicConfig(m.config);
     $('who').textContent = m.username + (m.isAdmin ? ' · admin' : '');
     $('btnSettings').style.display='';           // chacun gère ses propres réglages
     if(IS_ADMIN) $('tabAdmin').style.display='';
@@ -45,7 +46,7 @@ async function loadSettings(){
   $('s_pw').placeholder = d.hasPassword?'(inchangé)':'(vide)'; $('s_e2e').placeholder = d.hasE2e?'(inchangé)':'(vide)';
   try { ALIASES = JSON.parse(d.aliases||'{}'); } catch { ALIASES={}; }
   renderAliases(); fetchAccounts(); loadSeedConfig(); fillAiSettings(d);
-  if(IS_ADMIN){ loadUsers(); loadLocks(); loadNtfy(); }
+  if(IS_ADMIN){ loadUsers(); loadLocks(); loadNtfy(); loadParams(); }
 }
 $('s_save').onclick = async () => {
   $('s_msg').textContent='…';
@@ -279,6 +280,62 @@ $('n_test').onclick = async () => {
   const r = await (await fetch('/api/ntfy/test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({template:$('n_tpl').value})})).json();
   $('n_msg').textContent = r.ok ? 'Test envoyé ✓ (vérifie ntfy)' : ('Échec : '+r.error);
 };
+// --- Paramètres globaux (admin) : générés depuis la définition du serveur (params.mjs) ---
+let PARAMS_DEF = [];
+function paramInput(p){
+  const id = 'prm_'+p.key;
+  if(p.type==='enum') return `<select id="${id}">${p.options.map(([v,l])=>`<option value="${esc(v)}"${v===p.value?' selected':''}>${esc(l)}</option>`).join('')}</select>`;
+  if(p.type==='secret') return `<input type="password" id="${id}" autocomplete="new-password" placeholder="${p.hasValue?'(enregistrée — vide pour la garder)':'(aucune)'}">`;
+  if(p.type==='int'||p.type==='pct') return `<input type="number" id="${id}" min="${p.min}" max="${p.max}" step="1" value="${esc(p.value)}" style="max-width:120px">`;
+  return `<input type="text" id="${id}" value="${esc(p.value)}">`;
+}
+function paramDefault(p){
+  if(p.type==='secret') return '';
+  const unit = p.type==='pct' ? ' %' : (p.unit ? ' '+p.unit : '');
+  const d = p.type==='enum' ? (p.options.find(o=>o[0]===p.def)||[,p.def])[1] : (p.def===''?'(vide)':p.def+unit);
+  return `défaut : ${esc(d)}`;
+}
+function renderParams(){
+  let html = '', group = '';
+  for(const p of PARAMS_DEF){
+    if(p.group!==group){ group = p.group; html += `<div class="prmGroup">${esc(group)}</div>`; }
+    const unit = p.type==='pct' ? '%' : (p.unit||'');
+    const state = p.custom ? ' · <span class="prmCustom">modifié</span>' : (p.fromEnv ? ' · <span class="prmCustom">variable d\'env</span>' : '');
+    const resetLnk = (p.custom || (p.type==='secret' && p.hasValue)) ? ` · <a href="#" class="prmReset" data-key="${esc(p.key)}">${p.type==='secret'?'effacer':'remettre par défaut'}</a>` : '';
+    html += `<div class="prmRow"><label for="prm_${esc(p.key)}">${esc(p.label)}</label>
+      <div class="prmField">${paramInput(p)}${unit?` <span class="mini">${esc(unit)}</span>`:''}</div>
+      <div class="mini">${p.help?esc(p.help)+' · ':''}${paramDefault(p)}${state}${resetLnk}</div></div>`;
+  }
+  $('prmList').innerHTML = html || '<span class="mini">Aucun paramètre.</span>';
+  document.querySelectorAll('#prmList .prmReset').forEach(a=>a.onclick=async e=>{
+    e.preventDefault();
+    const r = await (await fetch('/api/admin/params',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reset:[a.dataset.key]})})).json();
+    $('prm_msg').textContent = r.ok ? 'Remis par défaut ✓' : ('Erreur : '+r.error);
+    await loadParams(); refreshPublicConfig();
+  });
+}
+async function loadParams(){
+  try { const d = await (await fetch('/api/admin/params')).json(); if(!d.ok) return; PARAMS_DEF = d.params; renderParams(); } catch {}
+}
+async function refreshPublicConfig(){
+  try { const m = await (await fetch('/api/me')).json(); if(m.ok) applyPublicConfig(m.config); } catch {}
+}
+$('prm_save').onclick = async () => {
+  const values = {};
+  for(const p of PARAMS_DEF){
+    const el = $('prm_'+p.key); if(!el) continue;
+    const v = el.value;
+    if(p.type==='secret'){ if(v.trim()) values[p.key] = v; continue; }
+    if(String(v).trim() !== String(p.value)) values[p.key] = v;   // n'envoie que ce qui a changé
+  }
+  if(!Object.keys(values).length){ $('prm_msg').textContent = 'Rien n\'a changé.'; return; }
+  $('prm_msg').textContent = '…';
+  const r = await (await fetch('/api/admin/params',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({values})})).json();
+  if(!r.ok){ $('prm_msg').textContent = 'Erreur : '+r.error; return; }
+  const csp = 'aiConnectSrc' in values;
+  $('prm_msg').textContent = `Enregistré ✓ (${r.saved} paramètre(s)), actif tout de suite.` + (csp ? ' Recharge la page (Ctrl+F5) pour les adresses d\'IA.' : '');
+  await loadParams(); refreshPublicConfig();
+};
 $('unlockAll').onclick = async () => { if(confirm('Débloquer TOUTES les connexions bloquées ?')){ await fetch('/api/unlock',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})}); loadLocks(); } };
 $('p_btn').onclick = async () => {
   $('p_msg').textContent = '…';
@@ -425,7 +482,7 @@ function fillAiSettings(d){
   $('ai_provider').value = AI.provider; $('ai_url').value = AI.url;
   setModelOptions(AI.model ? [AI.model] : [], AI.model);
   $('ai_origin').textContent = location.origin;
-  $('ai_brave').value = ''; $('ai_brave').placeholder = d.hasBraveKey ? '(enregistrée — vide pour la garder)' : '(aucune)';
+  $('ai_brave').value = ''; $('ai_brave').placeholder = d.hasBraveKey ? '(enregistrée — vide pour la garder)' : (d.hasBraveShared ? '(aucune — la clé partagée de l\'admin est utilisée)' : '(aucune)');
 }
 async function loadAiSettings(){
   try { const d = await (await fetch('/api/settings')).json(); if(d.ok) AI = { provider:d.aiProvider||'ollama', url:d.aiUrl||'http://localhost:11434', model:d.aiModel||'' }; } catch {}
@@ -552,8 +609,19 @@ async function aiDescribe(name, web){
 //  Suggestions de catégories (historique + IA locale) — rien n'est écrit sans « Appliquer »
 // ============================================================================
 let SG = { items:[], categories:[] }, SG_STOP = false;
-const PRECHECK = 0.8;          // suggestion cochée d'office à partir de 80 %
-const AI_BELOW = 0.6;          // l'IA traite ce qui est sous 60 % (ou tout, si coché)
+let PRECHECK = 0.8;            // suggestion cochée d'office à partir de 80 %   (réglable : onglet Admin)
+let AI_BELOW = 0.6;            // l'IA traite ce qui est sous 60 % (ou tout, si coché)  (réglable : onglet Admin)
+let WEB_ON = true;             // recherche web autorisée par l'admin
+function applyPublicConfig(c){
+  if(!c) return;
+  if(typeof c.suggestPrecheck==='number') PRECHECK = c.suggestPrecheck;
+  if(typeof c.suggestAiBelow==='number') AI_BELOW = c.suggestAiBelow;
+  if(typeof c.webSearch==='boolean'){
+    WEB_ON = c.webSearch;
+    const w = $('sgWeb'); if(w){ w.disabled = !WEB_ON; if(!WEB_ON) w.checked = false;
+      w.parentElement.title = WEB_ON ? "Pour les commerçants inconnus, cherche sur internet ce que c'est (seul le nom part sur internet)" : "Recherche web désactivée par l'administrateur"; }
+  }
+}
 function sgKeyword(it){
   const p = String(it.payeeName||'').trim(), n = String(it.notes||'');
   if(p.length >= 3 && n.toLowerCase().includes(p.toLowerCase())) return p;
