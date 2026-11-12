@@ -676,7 +676,16 @@ $('sgAI').onclick = async ()=>{
   const all = $('sgAIAll').checked;
   const todo = SG.items.filter(it=>!it.chosen && !it.internal && (all || !it.suggestion || it.suggestion.confidence < AI_BELOW));
   const useWeb = $('sgWeb').checked; let webErr = '';
-  if(!todo.length){ $('sgMsg').textContent = 'Aucune opération à soumettre à l\'IA (coche « aussi les suggestions déjà fiables » pour tout repasser).'; return; }
+  if(!todo.length){
+    const nInt = SG.items.filter(it=>!it.chosen && it.internal).length;
+    const nOthers = SG.items.filter(it=>!it.chosen && !it.internal).length;
+    $('sgMsg').innerHTML = (nInt && !nOthers)
+      ? `Rien à demander à l'IA : il ne reste que <b>${nInt} virement(s) interne(s)</b>. Ils n'ont pas de catégorie : dans Actual, relie-les comme <b>virement</b> entre tes comptes (ou choisis une catégorie à la main si ce n'en est pas un).`
+      : !SG.items.length ? 'Rien à classer.'
+      : !all ? 'Les opérations restantes ont déjà une suggestion fiable de l\'historique (coche « aussi les suggestions déjà fiables » pour les repasser à l\'IA).'
+      : 'Rien à demander à l\'IA : tu as déjà choisi une catégorie pour les opérations restantes.';
+    return;
+  }
   SG_STOP = false; $('sgAI').disabled = true; $('sgAIStop').style.display = '';
   let done = 0, got = 0, t0 = Date.now();
   try {
